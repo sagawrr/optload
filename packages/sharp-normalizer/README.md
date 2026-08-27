@@ -47,6 +47,19 @@ const intake = createServerImageIntake({
 const result = await intake.process(upload);
 ```
 
+For Effect integrators, the `/effect` entry preserves the typed error channel
+(`SharpNormalizerError`) and interruption — aborting the fiber SIGKILLs the
+forked child:
+
+```ts
+import { createServerImageIntakeEffect } from '@optload/server/effect';
+import { createSharpNormalizer } from '@optload/sharp-normalizer/effect';
+
+const intake = createServerImageIntakeEffect({
+  normalizer: createSharpNormalizer(),
+});
+```
+
 `supportedInputFormats()` reports container-level input support (jpeg,
 png, webp, tiff, gif, svg, plus the HEIF family when libheif is compiled in).
 For the HEIF family the container claim is not enough: official prebuilt

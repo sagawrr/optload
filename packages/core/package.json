@@ -25,6 +25,15 @@
     "effect": "3.22.1"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sagawrr/optload.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/sagawrr/optload/issues"
+  },
+  "homepage": "https://github.com/sagawrr/optload/tree/main/packages/core#readme",
   "keywords": [
     "image",
     "upload",

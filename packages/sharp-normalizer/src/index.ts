@@ -5,7 +5,9 @@ import {
   SourceDimensionExceededError,
   UnsupportedFormatError,
   inspectImageBytes,
+  isOptloadError,
   type FileLike,
+  type ImageFormat,
 } from '@optload/core';
 import { Effect } from 'effect';
 import { fork } from 'node:child_process';
@@ -16,6 +18,7 @@ import type {
   ServerImageNormalizer,
   ServerNormalizationRequest,
 } from '@optload/server';
+import type { ServerImageNormalizer as EffectServerImageNormalizer } from '@optload/server/effect';
 import type { ChildFailure, ChildResponse } from './protocol.js';
 import { avifProbeBytes, hevcProbeBytes } from './probes.js';
 
@@ -47,6 +50,18 @@ export interface NormalizedImageFile extends FileLike {
   readonly bytes: Uint8Array;
 }
 
+/**
+ * The typed failure surface of the Effect normalizer: exactly the failures
+ * the child protocol reports, with unexpected rejections narrowed to
+ * DecodeError instead of an untyped Error.
+ */
+export type SharpNormalizerError =
+  | UnsupportedFormatError
+  | SourceDimensionExceededError
+  | DecodeError
+  | EncodeError
+  | ProcessingTimeoutError;
+
 const defaultTimeoutMs = 25_000;
 const defaultDecodeLimits: DecodeLimits = {
   maxPixels: 33_554_432,
@@ -74,26 +89,45 @@ export function createSharpNormalizer(
 
 /**
  * Effect-native variant for `@optload/server/effect` integrators: satisfies
- * the Effect normalizer contract (typed error channel, interruptible).
+ * the Effect normalizer contract with the typed error channel preserved.
+ * Interrupting the fiber aborts the underlying request, which SIGKILLs the
+ * child process.
  */
 export function createSharpNormalizerEffect(
   options: SharpNormalizerOptions = {},
-): {
-  readonly isolation: 'process';
-  readonly normalize: (
-    request: ServerNormalizationRequest,
-  ) => Effect.Effect<NormalizedImageFile, Error>;
-} {
-  const normalizer = createSharpNormalizer(options);
+): EffectServerImageNormalizer<NormalizedImageFile, SharpNormalizerError> {
+  const timeoutMs = positiveInt(options.timeoutMs, defaultTimeoutMs);
+  const decodeLimits = options.decodeLimits ?? defaultDecodeLimits;
+
   return {
     isolation: 'process',
     normalize: (request) =>
       Effect.tryPromise({
-        try: (signal) =>
-          Promise.resolve(normalizer.normalize({ ...request, signal })),
-        catch: (cause) => cause as Error,
+        try: (signal) => normalize({ ...request, signal }, timeoutMs, decodeLimits),
+        catch: (cause) =>
+          toNormalizerError(cause, request.inspection.format),
       }),
   };
+}
+
+const normalizerErrorTags: ReadonlySet<string> = new Set([
+  'UnsupportedFormatError',
+  'SourceDimensionExceededError',
+  'DecodeError',
+  'EncodeError',
+  'ProcessingTimeoutError',
+]);
+
+function toNormalizerError(
+  cause: unknown,
+  format: ImageFormat | null,
+): SharpNormalizerError {
+  // Tag membership is the union witness: the child protocol only produces
+  // these five failures, so anything else is an unexpected transport error.
+  if (isOptloadError(cause) && normalizerErrorTags.has(cause._tag)) {
+    return cause as SharpNormalizerError;
+  }
+  return new DecodeError({ format, reason: cause });
 }
 
 /** Input containers this sharp build accepts from bytes (see probeDecoders). */

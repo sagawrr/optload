@@ -6,7 +6,7 @@
     "lib": ["ES2022"],
     "types": ["node"]
   },
-  "references": [{ "path": "../core" }],
+  "references": [{ "path": "../core" }, { "path": "../server" }],
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.test.ts"]
 }

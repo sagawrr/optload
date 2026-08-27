@@ -29,6 +29,15 @@
     "effect": "3.22.1"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sagawrr/optload.git",
+    "directory": "packages/browser"
+  },
+  "bugs": {
+    "url": "https://github.com/sagawrr/optload/issues"
+  },
+  "homepage": "https://github.com/sagawrr/optload/tree/main/packages/browser#readme",
   "keywords": [
     "image",
     "upload",
