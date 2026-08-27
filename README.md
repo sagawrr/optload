@@ -1,5 +1,8 @@
 # optload
 
+[![CI](https://github.com/sagawrr/optload/actions/workflows/ci.yml/badge.svg)](https://github.com/sagawrr/optload/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+
 Effect-powered image intake with an idiomatic Promise API and a deliberate
 server fallback.
 
@@ -30,6 +33,14 @@ server must remain the authority that decides what gets stored or served.
 6. Re-inspect and decode under server-side resource limits before accepting the
    result. Browser output is still attacker-controlled input.
 
+Every file resolves to exactly one of three routes:
+
+| Route | When | Result |
+| --- | --- | --- |
+| **local** | The browser can provably decode *and* encode the format, and policy accepts it | A re-encoded blob from a fresh worker; metadata and appended bytes do not survive |
+| **fallback** | Missing codecs (HEIC on most browsers), unknown dimensions, or any local failure | Your handler receives the file, the inspection, and the reason; the server re-verifies everything |
+| **reject** | Active content disguised as an image, bomb dimensions, unwanted animation, trailing data | A typed error before any decoder runs |
+
 ## Packages
 
 - `@optload/core` — bounded header inspection, policy, and tagged Effect errors.
@@ -45,6 +56,8 @@ server must remain the authority that decides what gets stored or served.
 - `@optload/playground` — runnable Vite example demonstrating every scenario:
   the local worker route, the server fallback route, active-content rejection,
   mid-flight cancellation, and inspection warnings for mismatched files.
+  `pnpm dev` serves it; its [goal page](./examples/playground/goal.html)
+  states the threat model in three paragraphs.
 
 Effect is pinned to the latest stable 3.x release rather than the 4.x release
 candidate. It powers cancellation, typed failures, resource cleanup, and
@@ -207,22 +220,23 @@ behavior (regenerate with `pnpm test:browsers`), and
 [docs/security-research.md](./docs/security-research.md) for the incident
 research behind every rule.
 
-## MediaBunny
+## Roadmap
 
-MediaBunny is a strong fit for a future video/audio package: container parsing,
-demuxing, WebCodecs orchestration, and remuxing. It is not the primary image
-decoder for this package, and adding it would not remove the need for policy,
-resource limits, worker isolation, or server validation.
+MediaBunny is the leading candidate for a future video/audio package
+(container parsing, demuxing, WebCodecs, remuxing); it would sit beside this
+pipeline, not replace its policy, isolation, or server verification.
 
 ## Develop
 
 ```sh
 pnpm install
-pnpm test
-pnpm test:browsers   # regenerate docs/browser-matrix.md from real engine runs
+pnpm test             # unit, security-repro, fuzz, and process-isolation suites
+pnpm test:browsers    # regenerate docs/browser-matrix.md from real engine runs
 pnpm typecheck
 pnpm lint
-pnpm dev
+pnpm build
+pnpm sbom:all           # emit sbom.cyclonedx.json (incl. native codec binaries)
+pnpm dev                # serve the playground at localhost
 ```
 
 `pnpm lint` runs oxlint with complexity ceilings (cyclomatic complexity ≤ 15,

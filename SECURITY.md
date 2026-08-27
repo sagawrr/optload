@@ -110,7 +110,11 @@ for client-side policy.
   previews — preview generation is decode, and every embedder of a bundled
   codec inherits its bugs.
 - Treat optional codec packs as separate, lazy-loaded trust domains.
-- Generate an SBOM and run dependency plus malicious-fixture tests before release.
+- Generate an SBOM before release: `pnpm sbom:all` emits
+  `sbom.cyclonedx.json` from the installed store, including the native
+  codec binaries (`@img/*`) and workspace packages that pnpm's built-in
+  `pnpm sbom` omits; CI attaches the file to every run. Dependency and
+  malicious-fixture tests run in `pnpm test`.
 - A server decoder must run behind an OS/container boundary; a JavaScript worker
   thread alone is not adequate isolation for native codec failures. The
   reference adapter forks one child process per image and pins sharp 0.35.4

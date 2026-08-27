@@ -66,6 +66,10 @@ header {
   border-radius: 999px;
 }
 
+.site-nav { display: inline-flex; gap: 16px; align-items: center; }
+.nav-link { color: #9ba1ad; font-size: 13px; font-weight: 600; text-decoration: none; }
+.nav-link:hover { color: #a9b3ff; }
+
 main {
   display: grid;
   grid-template-columns: 0.9fr 1.1fr;

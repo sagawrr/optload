@@ -5,3 +5,4 @@ coverage/
 *.tsbuildinfo
 .vite/
 
+sbom.cyclonedx.json

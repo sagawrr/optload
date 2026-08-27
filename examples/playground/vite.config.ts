@@ -12,4 +12,12 @@ export default defineConfig({
       ),
     },
   },
+  build: {
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        goal: fileURLToPath(new URL('./goal.html', import.meta.url)),
+      },
+    },
+  },
 });

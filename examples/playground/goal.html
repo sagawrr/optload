@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="Why optload exists: untrusted image uploads, verified routes, and an explicit server authority"
+    />
+    <title>The goal — Optload</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body class="goal-page">
+    <div id="app">
+      <header>
+        <a class="brand" href="/" aria-label="Optload home">
+          <span class="brand-mark">O</span>
+          <span>optload</span>
+        </a>
+        <a class="sample-button goal-back" href="/">Try the demo →</a>
+      </header>
+
+      <main class="goal-main">
+        <section class="goal-copy">
+          <p class="eyebrow">The goal</p>
+          <h1><em>Treat every upload</em><br />as hostile bytes.</h1>
+          <p class="lede">
+            An image file is not what its extension or MIME type claims. It is
+            bytes that a decoder will execute — parsers with CVE histories,
+            polyglot containers, headers that understate frame sizes, and
+            metadata that leaks locations. Optload's goal is an upload path
+            where none of that reaches storage unverified.
+          </p>
+          <p class="lede">
+            The browser does the work that improves the experience — inspect a
+            bounded prefix, enforce policy, resize and re-encode in a fresh
+            worker, upload the smaller blob. The server stays the authority:
+            it re-inspects, decodes in an isolated process, and verifies the
+            output before anything is stored or served. Browser output is
+            still attacker-controlled input.
+          </p>
+        </section>
+
+        <section class="goal-routes" aria-label="Every file takes one of three routes">
+          <p class="eyebrow">Every file takes one of three routes</p>
+          <article class="route-card">
+            <h2>Local</h2>
+            <p>
+              A still image the browser can provably decode <em>and</em>
+              encode. One fresh worker per image verifies the decoded bitmap
+              against the header's claims, then re-encodes it — source
+              metadata, ICC profiles, and appended bytes do not survive.
+            </p>
+          </article>
+          <article class="route-card">
+            <h2>Server fallback</h2>
+            <p>
+              Missing codecs (HEIC on most browsers), unknown dimensions, or a
+              local failure. Never silent: the intake hands your code the file,
+              the inspection, and the reason, and your server re-verifies
+              everything under its own limits.
+            </p>
+          </article>
+          <article class="route-card">
+            <h2>Reject</h2>
+            <p>
+              Active content disguised as an image, decompression-bomb
+              dimensions, animation when you did not ask for it, trailing data
+              past a container's end marker. Rejected before any decoder runs.
+            </p>
+          </article>
+        </section>
+      </main>
+
+      <footer class="goal-footer">
+        <p>
+          The full trust model, incident research behind every rule, and the
+          remaining deployment obligations live in the repository:
+          <code>SECURITY.md</code>, <code>docs/security-research.md</code>,
+          and the verified per-engine behavior in
+          <code>docs/browser-matrix.md</code>.
+        </p>
+      </footer>
+    </div>
+
+    <style>
+      .goal-main {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: clamp(40px, 6vw, 90px);
+        align-items: start;
+        padding: 70px 0 40px;
+      }
+
+      .goal-copy h1 {
+        margin: 14px 0 24px;
+        font-size: clamp(40px, 5vw, 68px);
+      }
+
+      .goal-copy .lede + .lede { margin-top: 18px; }
+
+      .goal-routes {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        padding: 26px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 28px;
+        background: rgba(18, 20, 26, 0.78);
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+      }
+
+      .route-card { padding: 18px; border-radius: 18px; background: #111319; }
+
+      .route-card h2 {
+        margin: 0 0 8px;
+        font-size: 15px;
+        letter-spacing: 0.02em;
+        color: #a9b3ff;
+      }
+
+      .route-card p { margin: 0; color: #9ba1ad; font-size: 14px; line-height: 1.6; }
+
+      .goal-footer {
+        padding: 24px 0 50px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .goal-footer p { margin: 24px 0 0; color: #707681; font-size: 13px; line-height: 1.7; }
+      .goal-footer code { color: #cbd0ff; }
+
+      .goal-back { text-decoration: none; }
+
+      @media (max-width: 820px) {
+        .goal-main { grid-template-columns: 1fr; padding: 48px 0 24px; }
+      }
+    </style>
+  </body>
+</html>
