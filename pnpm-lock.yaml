@@ -29,9 +29,6 @@ importers:
       '@optload/browser':
         specifier: workspace:*
         version: link:../../packages/browser
-      effect:
-        specifier: 3.22.1
-        version: 3.22.1
     devDependencies:
       vite:
         specifier: ^7.1.3

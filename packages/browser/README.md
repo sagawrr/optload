@@ -1,20 +1,23 @@
 # @optload/browser
 
-Effect-native browser image inspection, policy, worker normalization, and
-explicit server fallback.
+Effect-powered browser image inspection, policy, worker normalization, and
+explicit server fallback. The default API is Promise-first.
 
 ```ts
 import { createImageIntake } from "@optload/browser"
 
 const images = createImageIntake({
   output: { format: "webp", maxWidth: 2048, maxHeight: 2048 },
-  fallback: ({ file }) => uploadOriginalToYourServer(file),
+  fallback: async ({ file, signal }) =>
+    uploadOriginalToYourServer(file, { signal }),
 })
 
-const result = await images.processPromise(file, { signal })
+const result = await images.process(file, { signal })
 ```
 
-The fallback function returns an `Effect`; the Promise API is an adapter over the
-same pipeline. Browser output remains untrusted and must be validated by the
-receiving server. See the repository `README.md` and `SECURITY.md` for the full
-contract.
+Effect users import the native API from `@optload/browser/effect`; its factory
+and method names are identical, while callbacks and results remain composable
+Effects. Both entry points run the same Effect-native engine.
+
+Browser output remains untrusted and must be validated by the receiving server.
+See the repository `README.md` and `SECURITY.md` for the full contract.

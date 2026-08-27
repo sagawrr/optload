@@ -1,19 +1,21 @@
-import { Effect } from 'effect';
 import { describe, expect, it } from 'vitest';
-import { createServerImageIntake } from './server.js';
+import { createServerImageIntake } from './promise-server.js';
 
 describe('server image intake', () => {
   it('re-inspects and constrains browser-normalized output', async () => {
+    let receivedSignal = false;
     const intake = createServerImageIntake({
       normalizer: {
         isolation: 'process',
-        normalize: () =>
-          Effect.succeed(webpFile('normalized.webp', 1200, 800)),
+        normalize: ({ signal }) => {
+          receivedSignal = signal instanceof AbortSignal;
+          return webpFile('normalized.webp', 1200, 800);
+        },
       },
       output: { format: 'webp', maxWidth: 2048, maxHeight: 2048 },
     });
 
-    const result = await intake.processPromise(pngFile('browser.webp', 2400, 1600));
+    const result = await intake.process(pngFile('browser.webp', 2400, 1600));
 
     expect(result.inputInspection.format).toBe('png');
     expect(result.outputInspection).toMatchObject({
@@ -22,6 +24,7 @@ describe('server image intake', () => {
       height: 800,
     });
     expect(result.isolation).toBe('process');
+    expect(receivedSignal).toBe(true);
   });
 
   it('does not trust the browser filename or declared MIME type', async () => {
@@ -31,7 +34,7 @@ describe('server image intake', () => {
         isolation: 'external-service',
         normalize: () => {
           normalizerCalled = true;
-          return Effect.succeed(webpFile('output.webp', 10, 10));
+          return webpFile('output.webp', 10, 10);
         },
       },
     });
@@ -41,7 +44,7 @@ describe('server image intake', () => {
       { type: 'image/webp' },
     );
 
-    await expect(intake.processPromise(forged)).rejects.toMatchObject({
+    await expect(intake.process(forged)).rejects.toMatchObject({
       _tag: 'UnsupportedFormatError',
     });
     expect(normalizerCalled).toBe(false);
@@ -52,15 +55,15 @@ describe('server image intake', () => {
       normalizer: {
         isolation: 'external-service',
         normalize: ({ source }) =>
-          Effect.succeed(webpFile(`${source}.webp`, 800, 600)),
+          Promise.resolve(webpFile(`${source}.webp`, 800, 600)),
       },
     });
     const heic = bmffFile('heic', 1600, 1200);
 
-    await expect(intake.processPromise(heic)).rejects.toMatchObject({
+    await expect(intake.process(heic)).rejects.toMatchObject({
       _tag: 'UnsupportedFormatError',
     });
-    const fallback = await intake.processPromise(heic, {
+    const fallback = await intake.process(heic, {
       source: 'original-fallback',
     });
     expect(fallback.source).toBe('original-fallback');
@@ -72,13 +75,13 @@ describe('server image intake', () => {
     const intake = createServerImageIntake({
       normalizer: {
         isolation: 'container',
-        normalize: () => Effect.succeed(pngFile('wrong.png', 800, 600)),
+        normalize: () => pngFile('wrong.png', 800, 600),
       },
       output: { format: 'webp' },
     });
 
     await expect(
-      intake.processPromise(pngFile('input.png', 800, 600)),
+      intake.process(pngFile('input.png', 800, 600)),
     ).rejects.toMatchObject({ _tag: 'UnsupportedFormatError' });
   });
 
@@ -86,13 +89,13 @@ describe('server image intake', () => {
     const intake = createServerImageIntake({
       normalizer: {
         isolation: 'process',
-        normalize: () => Effect.succeed(webpFile('wide.webp', 1500, 900)),
+        normalize: () => webpFile('wide.webp', 1500, 900),
       },
       output: { format: 'webp', maxWidth: 1000, maxHeight: 2000 },
     });
 
     await expect(
-      intake.processPromise(pngFile('input.png', 800, 600)),
+      intake.process(pngFile('input.png', 800, 600)),
     ).rejects.toMatchObject({
       _tag: 'OutputDimensionExceededError',
       code: 'OUTPUT_DIMENSION_EXCEEDED',
@@ -103,12 +106,12 @@ describe('server image intake', () => {
     const intake = createServerImageIntake({
       normalizer: {
         isolation: 'thread' as 'process',
-        normalize: () => Effect.succeed(webpFile('output.webp', 10, 10)),
+        normalize: () => webpFile('output.webp', 10, 10),
       },
     });
 
     await expect(
-      intake.processPromise(pngFile('input.png', 10, 10)),
+      intake.process(pngFile('input.png', 10, 10)),
     ).rejects.toMatchObject({
       _tag: 'UnsafeNormalizerError',
       code: 'UNSAFE_NORMALIZER',

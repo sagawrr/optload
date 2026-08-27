@@ -1,11 +1,15 @@
 import type {
   DropTarget,
   DropTargetOptions,
-  ImageIntake,
+  ImageResult,
 } from './types.js';
 
-export function attachDropTarget<FallbackValue, FallbackError>(
-  intake: ImageIntake<FallbackValue, FallbackError>,
+interface DropImageProcessor<FallbackValue> {
+  readonly process: (file: File) => Promise<ImageResult<FallbackValue>>;
+}
+
+export function attachDropTarget<FallbackValue>(
+  intake: DropImageProcessor<FallbackValue>,
   target: DropTarget,
   options: DropTargetOptions<FallbackValue>,
 ): () => void {
@@ -70,14 +74,14 @@ function reportActive<FallbackValue>(
   }
 }
 
-async function processSequentially<FallbackValue, FallbackError>(
-  intake: ImageIntake<FallbackValue, FallbackError>,
+async function processSequentially<FallbackValue>(
+  intake: DropImageProcessor<FallbackValue>,
   files: readonly File[],
   options: DropTargetOptions<FallbackValue>,
 ): Promise<void> {
   for (const file of files) {
     try {
-      const result = await intake.processPromise(file);
+      const result = await intake.process(file);
       options.onResult(result, file);
     } catch (error) {
       options.onError?.(error, file);

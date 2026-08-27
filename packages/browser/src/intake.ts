@@ -23,8 +23,6 @@ import {
 import { notifyProgress, reportProgress } from './progress.js';
 import type {
   ImageFallbackRequest,
-  ImageIntake,
-  ImageIntakeOptions,
   ImagePlan,
   ImageProgressEvent,
   ImageProgressHandler,
@@ -32,6 +30,10 @@ import type {
   LocalExecution,
   ProcessImageOptions,
 } from './types.js';
+import type {
+  EffectImageIntake,
+  EffectImageIntakeOptions,
+} from './effect-types.js';
 import { processInFreshWorker } from './worker-client.js';
 
 interface ExecutedLocalResult extends LocalProcessorResult {
@@ -40,9 +42,12 @@ interface ExecutedLocalResult extends LocalProcessorResult {
 
 const defaultTimeoutMs = 15_000;
 
-export function createImageIntake<FallbackValue = never, FallbackError = never>(
-  config: ImageIntakeOptions<FallbackValue, FallbackError> = {},
-): ImageIntake<FallbackValue, FallbackError> {
+export function createImageIntakeEffect<
+  FallbackValue = never,
+  FallbackError = never,
+>(
+  config: EffectImageIntakeOptions<FallbackValue, FallbackError> = {},
+): EffectImageIntake<FallbackValue, FallbackError> {
   const inspect = (file: File) => inspectImage(file);
 
   const plan = (
@@ -153,14 +158,18 @@ export function createImageIntake<FallbackValue = never, FallbackError = never>(
     });
   };
 
-  const intake: ImageIntake<FallbackValue, FallbackError> = {
+  const intake: EffectImageIntake<FallbackValue, FallbackError> = {
     inspect,
     plan,
     process,
-    processPromise: (file, options = {}) =>
-      runEffectPromise(process(file, options), { signal: options.signal }),
     attachDropTarget: (target, options) =>
-      attachDropTarget(intake, target, options),
+      attachDropTarget(
+        {
+          process: (file) => runEffectPromise(process(file)),
+        },
+        target,
+        options,
+      ),
   };
 
   return intake;
@@ -168,7 +177,7 @@ export function createImageIntake<FallbackValue = never, FallbackError = never>(
 
 function makePlan<FallbackValue, FallbackError>(
   inspection: ImageInspection,
-  config: ImageIntakeOptions<FallbackValue, FallbackError>,
+  config: EffectImageIntakeOptions<FallbackValue, FallbackError>,
   options: ProcessImageOptions,
 ): Effect.Effect<ImagePlan> {
   return Effect.gen(function* () {
@@ -253,7 +262,7 @@ function runFallback<FallbackValue, FallbackError>(
   inspection: ImageInspection,
   reason: OptloadError | null,
   policyIssues: readonly import('@optload/core').PolicyIssue[],
-  config: ImageIntakeOptions<FallbackValue, FallbackError>,
+  config: EffectImageIntakeOptions<FallbackValue, FallbackError>,
   onProgress: ImageProgressHandler | undefined,
 ): Effect.Effect<
   ImageResult<FallbackValue>,

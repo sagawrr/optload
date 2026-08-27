@@ -13,7 +13,7 @@ describe('whole-page file drops', () => {
       resolveResult = resolve;
     });
     const intake = {
-      processPromise: async (candidate: File) => {
+      process: async (candidate: File) => {
         processed = candidate;
         return expected;
       },

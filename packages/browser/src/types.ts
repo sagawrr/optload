@@ -9,7 +9,8 @@ import type {
   PolicyIssue,
   ServerFallbackRequiredError,
 } from '@optload/core';
-import type { Effect } from 'effect';
+
+export type MaybePromise<Value> = Value | PromiseLike<Value>;
 
 export type ImageOutputFormat = 'jpeg' | 'png' | 'webp';
 export type ImageOutputFormatOption = ImageOutputFormat | 'auto';
@@ -101,18 +102,20 @@ export interface ImageFallbackRequest {
   readonly inspection: ImageInspection;
   readonly reason: OptloadError;
   readonly policyIssues: readonly PolicyIssue[];
+  /** Present for Promise-based fallbacks so fetch/upload work can be cancelled. */
+  readonly signal?: AbortSignal;
 }
 
-export type ImageFallback<Value, Error = never> = (
+export type ImageFallback<Value> = (
   request: ImageFallbackRequest,
-) => Effect.Effect<Value, Error>;
+) => MaybePromise<Value>;
 
-export interface ImageIntakeOptions<FallbackValue = never, FallbackError = never> {
+export interface ImageIntakeOptions<FallbackValue = never> {
   readonly policy?: ImagePolicy;
   readonly output?: ImageOutputOptions;
   readonly execution?: ProcessingExecution;
   readonly timeoutMs?: number;
-  readonly fallback?: ImageFallback<FallbackValue, FallbackError>;
+  readonly fallback?: ImageFallback<FallbackValue>;
   readonly onProgress?: ImageProgressHandler;
 }
 
@@ -140,22 +143,20 @@ export interface DropTargetOptions<FallbackValue> {
 
 export type DropTarget = Window | Document | HTMLElement;
 
-export interface ImageIntake<FallbackValue = never, FallbackError = never> {
+export interface InspectImageRunOptions {
+  readonly signal?: AbortSignal;
+}
+
+export interface ImageIntake<FallbackValue = never> {
   readonly inspect: (
     file: File,
-  ) => Effect.Effect<ImageInspection, InspectionError>;
+    options?: InspectImageRunOptions,
+  ) => Promise<ImageInspection>;
   readonly plan: (
     file: File,
-    options?: ProcessImageOptions,
-  ) => Effect.Effect<ImagePlan, InspectionError>;
+    options?: RunImageOptions,
+  ) => Promise<ImagePlan>;
   readonly process: (
-    file: File,
-    options?: ProcessImageOptions,
-  ) => Effect.Effect<
-    ImageResult<FallbackValue>,
-    ImageIntakeError | FallbackError
-  >;
-  readonly processPromise: (
     file: File,
     options?: RunImageOptions,
   ) => Promise<ImageResult<FallbackValue>>;

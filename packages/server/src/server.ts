@@ -2,7 +2,6 @@ import {
   ProcessingTimeoutError,
   enforceImagePolicy,
   inspectImage,
-  runEffectPromise,
   type FileLike,
   type ImagePolicy,
 } from '@optload/core';
@@ -15,12 +14,14 @@ import type {
   NormalizerIsolation,
   ProcessServerImageOptions,
   ResolvedServerOutputOptions,
-  ServerImageIntake,
-  ServerImageIntakeOptions,
   ServerImageResult,
   ServerOutputFormat,
   ServerOutputOptions,
 } from './types.js';
+import type {
+  EffectServerImageIntake,
+  EffectServerImageIntakeOptions,
+} from './effect-types.js';
 
 const mediaTypes: Readonly<Record<ServerOutputFormat, string>> = {
   jpeg: 'image/jpeg',
@@ -45,12 +46,12 @@ const allowedIsolation = new Set<NormalizerIsolation>([
   'external-service',
 ]);
 
-export function createServerImageIntake<
+export function createServerImageIntakeEffect<
   Output extends FileLike,
   NormalizerError = never,
 >(
-  config: ServerImageIntakeOptions<Output, NormalizerError>,
-): ServerImageIntake<Output, NormalizerError> {
+  config: EffectServerImageIntakeOptions<Output, NormalizerError>,
+): EffectServerImageIntake<Output, NormalizerError> {
   const output = resolveServerOutputOptions(config.output);
   const timeoutMs = positiveInteger(config.timeoutMs, 30_000);
 
@@ -116,8 +117,6 @@ export function createServerImageIntake<
 
   return {
     process,
-    processPromise: (input, options = {}) =>
-      runEffectPromise(process(input, options), { signal: options.signal }),
   };
 }
 
@@ -171,7 +170,7 @@ function finiteClamp(
 
 function inputPolicyFor<Output extends FileLike, Error>(
   source: import('./types.js').ServerImageSource,
-  config: ServerImageIntakeOptions<Output, Error>,
+  config: EffectServerImageIntakeOptions<Output, Error>,
 ): ImagePolicy {
   return source === 'browser-normalized'
     ? {

@@ -1,4 +1,4 @@
-export { createImageIntake } from './intake.js';
+export { createImageIntake } from './promise-intake.js';
 export { resolveOutputOptions, resolveTargetDimensions } from './options.js';
 export type {
   DropTarget,
@@ -27,5 +27,49 @@ export type {
   TargetDimensions,
 } from './types.js';
 
-export * from '@optload/core';
-
+export {
+  AnimationNotAllowedError,
+  DecodeError,
+  DimensionsUnknownError,
+  EncodeError,
+  EnvironmentUnsupportedError,
+  FileEmptyError,
+  FrameLimitExceededError,
+  InputTooLargeError,
+  InvalidDimensionsError,
+  InspectionReadError,
+  PixelLimitExceededError,
+  ProcessingTimeoutError,
+  ServerFallbackRequiredError,
+  SourceDimensionExceededError,
+  UnsupportedFormatError,
+  checkImagePolicy,
+  defaultImagePolicy,
+  formatExtensions,
+  formatMediaTypes,
+  imageFormats,
+  inspectImageBytes,
+  isOptloadError,
+  resolveImagePolicy,
+  type BlobLike,
+  type ExifOrientation,
+  type FileLike,
+  type ImageFormat,
+  type ImageInspection,
+  type ImagePolicy,
+  type ImagePolicyDecision,
+  type ImagePolicyError,
+  type ImageProcessingError,
+  type InspectImageOptions,
+  type InspectionError,
+  type InspectionWarning,
+  type InspectionWarningCode,
+  type OptloadError,
+  type OptloadErrorCode,
+  type OptloadStage,
+  type PolicyIssue,
+  type PolicyIssueCode,
+  type ResolvedImagePolicy,
+  type SupportedInputFormat,
+  type UnknownDimensionBehavior,
+} from '@optload/core';

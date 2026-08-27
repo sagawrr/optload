@@ -9,11 +9,9 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@optload/browser": "workspace:*",
-    "effect": "3.22.1"
+    "@optload/browser": "workspace:*"
   },
   "devDependencies": {
     "vite": "^7.1.3"
   }
 }
-

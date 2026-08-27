@@ -1,5 +1,4 @@
 import { createImageIntake, isOptloadError } from '@optload/browser';
-import { Effect } from 'effect';
 import './style.css';
 
 const fileInput = element<HTMLInputElement>('file-input');
@@ -32,12 +31,11 @@ const intake = createImageIntake({
     quality: 0.84,
   },
   timeoutMs: 15_000,
-  fallback: ({ inspection, reason }) =>
-    Effect.succeed({
-      status: 'server-required' as const,
-      format: inspection.format,
-      reason: reason.message,
-    }),
+  fallback: async ({ inspection, reason }) => ({
+    status: 'server-required' as const,
+    format: inspection.format,
+    reason: reason.message,
+  }),
   onProgress: ({ progress, message }) => {
     status.hidden = false;
     const percentage = Math.round(progress * 100);
@@ -74,7 +72,7 @@ async function processFiles(files: readonly File[]): Promise<void> {
   for (const file of files) {
     resetOutput();
     try {
-      const processed = await intake.processPromise(file);
+      const processed = await intake.process(file);
       renderResult(processed, file);
     } catch (cause) {
       renderError(cause);
@@ -83,7 +81,7 @@ async function processFiles(files: readonly File[]): Promise<void> {
 }
 
 function renderResult(
-  processed: Awaited<ReturnType<typeof intake.processPromise>>,
+  processed: Awaited<ReturnType<typeof intake.process>>,
   file: File,
 ): void {
   status.hidden = true;

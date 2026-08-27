@@ -1,7 +1,7 @@
 {
   "name": "@optload/server",
   "version": "0.1.0",
-  "description": "Effect-native server verification and isolated image-normalizer orchestration for Optload.",
+  "description": "Effect-powered server image verification with Promise-first and native Effect APIs.",
   "type": "module",
   "sideEffects": false,
   "files": ["dist"],
@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./effect": {
+      "types": "./dist/effect.d.ts",
+      "import": "./dist/effect.js"
     }
   },
   "scripts": {

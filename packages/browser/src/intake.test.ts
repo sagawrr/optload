@@ -1,13 +1,14 @@
 import { it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { describe, expect } from 'vitest';
-import { createImageIntake } from './intake.js';
+import { createImageIntakeEffect } from './intake.js';
+import { createImageIntake } from './promise-intake.js';
 
 describe('image intake routing', () => {
   it.effect('routes a recognized HEIC to the explicit fallback', () =>
     Effect.gen(function* () {
       const file = bmffFile('heic', 2048, 1365);
-      const intake = createImageIntake({
+      const intake = createImageIntakeEffect({
         onProgress: () => {
           throw new Error('consumer progress UI failed');
         },
@@ -30,7 +31,7 @@ describe('image intake routing', () => {
   it.effect('does not send a rejected active format to the fallback', () =>
     Effect.gen(function* () {
       let fallbackCalled = false;
-      const intake = createImageIntake({
+      const intake = createImageIntakeEffect({
         fallback: () => {
           fallbackCalled = true;
           return Effect.void;
@@ -50,7 +51,7 @@ describe('image intake routing', () => {
 
   it.effect('fails clearly when fallback is required but not configured', () =>
     Effect.gen(function* () {
-      const intake = createImageIntake();
+      const intake = createImageIntakeEffect();
       const error = yield* intake.process(bmffFile('heic', 800, 600)).pipe(
         Effect.flip,
       );
@@ -68,9 +69,23 @@ describe('image intake routing', () => {
       { type: 'image/jpeg' },
     );
 
-    await expect(intake.processPromise(active)).rejects.toMatchObject({
+    await expect(intake.process(active)).rejects.toMatchObject({
       _tag: 'UnsupportedFormatError',
       code: 'UNSUPPORTED_FORMAT',
+    });
+  });
+
+  it('accepts an ordinary async fallback without importing Effect', async () => {
+    const intake = createImageIntake({
+      fallback: async ({ inspection, signal }) => ({
+        format: inspection.format,
+        cancellable: signal instanceof AbortSignal,
+      }),
+    });
+
+    await expect(intake.process(bmffFile('heic', 800, 600))).resolves.toMatchObject({
+      kind: 'fallback',
+      value: { format: 'heic', cancellable: true },
     });
   });
 });

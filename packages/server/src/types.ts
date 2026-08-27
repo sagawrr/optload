@@ -6,11 +6,12 @@ import type {
   InspectionError,
   ProcessingTimeoutError,
 } from '@optload/core';
-import type { Effect } from 'effect';
 import type {
   OutputDimensionExceededError,
   UnsafeNormalizerError,
 } from './errors.js';
+
+export type MaybePromise<Value> = Value | PromiseLike<Value>;
 
 export type ServerImageSource = 'browser-normalized' | 'original-fallback';
 export type ServerOutputFormat = 'jpeg' | 'png' | 'webp';
@@ -40,24 +41,23 @@ export interface ServerNormalizationRequest {
   readonly source: ServerImageSource;
   readonly inspection: ImageInspection;
   readonly output: ResolvedServerOutputOptions;
+  /** Present for Promise-based normalizers so remote work can be cancelled. */
+  readonly signal?: AbortSignal;
 }
 
 /**
  * Implementations must cross a real process/container/service boundary. A
  * worker thread is not sufficient isolation for native codecs.
  */
-export interface ServerImageNormalizer<Output extends FileLike, Error = never> {
+export interface ServerImageNormalizer<Output extends FileLike> {
   readonly isolation: NormalizerIsolation;
   readonly normalize: (
     request: ServerNormalizationRequest,
-  ) => Effect.Effect<Output, Error>;
+  ) => MaybePromise<Output>;
 }
 
-export interface ServerImageIntakeOptions<
-  Output extends FileLike,
-  NormalizerError = never,
-> {
-  readonly normalizer: ServerImageNormalizer<Output, NormalizerError>;
+export interface ServerImageIntakeOptions<Output extends FileLike> {
+  readonly normalizer: ServerImageNormalizer<Output>;
   /** Baseline policy merged into both upload routes. */
   readonly inputPolicy?: ImagePolicy;
   readonly browserInputPolicy?: ImagePolicy;
@@ -80,7 +80,7 @@ export interface ServerImageResult<Output extends FileLike> {
   readonly durationMs: number;
 }
 
-export type ServerImageIntakeError<NormalizerError> =
+export type ServerImageIntakeError<NormalizerError = unknown> =
   | InspectionError
   | ImagePolicyError
   | ProcessingTimeoutError
@@ -88,15 +88,8 @@ export type ServerImageIntakeError<NormalizerError> =
   | OutputDimensionExceededError
   | NormalizerError;
 
-export interface ServerImageIntake<Output extends FileLike, NormalizerError> {
+export interface ServerImageIntake<Output extends FileLike> {
   readonly process: (
-    input: FileLike,
-    options?: Omit<ProcessServerImageOptions, 'signal'>,
-  ) => Effect.Effect<
-    ServerImageResult<Output>,
-    ServerImageIntakeError<NormalizerError>
-  >;
-  readonly processPromise: (
     input: FileLike,
     options?: ProcessServerImageOptions,
   ) => Promise<ServerImageResult<Output>>;
