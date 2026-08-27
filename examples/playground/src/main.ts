@@ -1,10 +1,12 @@
-import { createImageIntake, isOptloadError } from '@optload/browser';
+import { createImageIntake, isOptloadError, type InspectionWarning } from '@optload/browser';
 import './style.css';
 
 const fileInput = element<HTMLInputElement>('file-input');
 const chooseFiles = element<HTMLButtonElement>('choose-files');
 const trySample = element<HTMLButtonElement>('try-sample');
 const tryFallback = element<HTMLButtonElement>('try-fallback');
+const tryReject = element<HTMLButtonElement>('try-reject');
+const cancel = element<HTMLButtonElement>('cancel');
 const status = element<HTMLElement>('status');
 const statusMessage = element<HTMLElement>('status-message');
 const statusPercent = element<HTMLElement>('status-percent');
@@ -13,6 +15,7 @@ const result = element<HTMLElement>('result');
 const preview = element<HTMLImageElement>('preview');
 const route = element<HTMLElement>('route');
 const fileName = element<HTMLElement>('file-name');
+const warningsList = element<HTMLUListElement>('warnings');
 const inputInfo = element<HTMLElement>('input-info');
 const outputInfo = element<HTMLElement>('output-info');
 const savedInfo = element<HTMLElement>('saved-info');
@@ -21,6 +24,7 @@ const error = element<HTMLElement>('error');
 const dropOverlay = element<HTMLElement>('drop-overlay');
 
 let previewUrl: string | undefined;
+let activeController: AbortController | undefined;
 window.addEventListener('pagehide', revokePreview, { once: true });
 
 const intake = createImageIntake({
@@ -60,6 +64,14 @@ tryFallback.addEventListener('click', () => {
   void processFiles([generatedHeicFixture()]);
 });
 
+tryReject.addEventListener('click', () => {
+  void processFiles([activeContentFixture()]);
+});
+
+cancel.addEventListener('click', () => {
+  activeController?.abort();
+});
+
 intake.attachDropTarget(window, {
   onActiveChange: (active) => {
     dropOverlay.hidden = !active;
@@ -71,11 +83,18 @@ intake.attachDropTarget(window, {
 async function processFiles(files: readonly File[]): Promise<void> {
   for (const file of files) {
     resetOutput();
+    activeController = new AbortController();
+    cancel.hidden = false;
     try {
-      const processed = await intake.process(file);
+      const processed = await intake.process(file, {
+        signal: activeController.signal,
+      });
       renderResult(processed, file);
     } catch (cause) {
       renderError(cause);
+    } finally {
+      cancel.hidden = true;
+      activeController = undefined;
     }
   }
 }
@@ -89,6 +108,7 @@ function renderResult(
   result.hidden = false;
   fileName.textContent = file.name;
   inputInfo.textContent = `${processed.inspection.format?.toUpperCase() ?? 'UNKNOWN'} · ${formatBytes(file.size)}`;
+  renderWarnings(processed.inspection.warnings);
 
   if (processed.kind === 'fallback') {
     revokePreview();
@@ -109,10 +129,26 @@ function renderResult(
   timeInfo.textContent = `${Math.round(processed.durationMs)}ms`;
 }
 
+function renderWarnings(list: readonly InspectionWarning[]): void {
+  warningsList.replaceChildren();
+  warningsList.hidden = list.length === 0;
+  for (const warning of list) {
+    const item = document.createElement('li');
+    const label = document.createElement('strong');
+    label.textContent = warning.code;
+    item.append(label, ` — ${warning.message}`);
+    warningsList.append(item);
+  }
+}
+
 function renderError(cause: unknown): void {
   status.hidden = true;
   result.hidden = true;
   error.hidden = false;
+  if (cause instanceof DOMException && cause.name === 'AbortError') {
+    error.textContent = 'Cancelled — the transfer was aborted before it finished.';
+    return;
+  }
   error.textContent = isOptloadError(cause)
     ? `${cause.code}: ${cause.message}`
     : cause instanceof Error
@@ -127,6 +163,8 @@ function resetOutput(): void {
   statusMessage.textContent = 'Starting…';
   statusPercent.textContent = '0%';
   progressBar.style.width = '0%';
+  warningsList.replaceChildren();
+  warningsList.hidden = true;
 }
 
 function revokePreview(): void {
@@ -177,7 +215,15 @@ function generatedHeicFixture(): File {
   const iprp = box('iprp', [...ipco]);
   const meta = box('meta', [0, 0, 0, 0, ...iprp]);
   const bytes = new Uint8Array([...ftyp, ...meta]);
-  return new File([bytes.buffer], 'camera-sample.heic', { type: 'image/heic' });
+  return new File([bytes], 'camera-sample.heic', { type: 'image/heic' });
+}
+
+/** Active content disguised with a bitmap name and MIME type. */
+function activeContentFixture(): File {
+  const svg =
+    '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)">' +
+    '<script>alert(1)</script></svg>';
+  return new File([svg], 'avatar.png', { type: 'image/png' });
 }
 
 function box(type: string, payload: readonly number[]): Uint8Array {

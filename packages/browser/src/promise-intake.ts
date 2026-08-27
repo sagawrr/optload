@@ -6,8 +6,6 @@ import type {
   ImageFallbackRequest,
   ImageIntake,
   ImageIntakeOptions,
-  ProcessImageOptions,
-  RunImageOptions,
 } from './types.js';
 
 /** Promise-first public boundary backed by the Effect-native intake engine. */

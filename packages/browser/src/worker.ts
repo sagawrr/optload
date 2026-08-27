@@ -11,7 +11,7 @@ import { serializeProcessingError } from './worker-protocol.js';
 
 const worker = globalThis as unknown as DedicatedWorkerGlobalScope;
 
-worker.onmessage = (event: MessageEvent<WorkerProcessRequest>) => {
+worker.addEventListener('message', (event: MessageEvent<WorkerProcessRequest>) => {
   if (event.data._tag !== 'Process') return;
 
   const send = (message: WorkerProcessResponse): void => worker.postMessage(message);
@@ -21,8 +21,7 @@ worker.onmessage = (event: MessageEvent<WorkerProcessRequest>) => {
     }),
   ).then((exit) => {
     if (Exit.isSuccess(exit)) {
-      send({ _tag: 'Success', result: exit.value });
-      return;
+      return send({ _tag: 'Success', result: exit.value });
     }
 
     const failure = Cause.failureOption(exit.cause);
@@ -32,6 +31,6 @@ worker.onmessage = (event: MessageEvent<WorkerProcessRequest>) => {
           feature: 'image worker runtime',
           reason: Cause.squash(exit.cause),
         });
-    send({ _tag: 'Failure', error: serializeProcessingError(error) });
+    return send({ _tag: 'Failure', error: serializeProcessingError(error) });
   });
-};
+});

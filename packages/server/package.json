@@ -4,7 +4,9 @@
   "description": "Effect-powered server image verification with Promise-first and native Effect APIs.",
   "type": "module",
   "sideEffects": false,
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -25,5 +27,14 @@
   "dependencies": {
     "@optload/core": "workspace:*",
     "effect": "3.22.1"
-  }
+  },
+  "license": "MIT",
+  "keywords": [
+    "image",
+    "upload",
+    "validation",
+    "security",
+    "normalizer",
+    "effect"
+  ]
 }

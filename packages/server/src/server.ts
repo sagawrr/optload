@@ -40,6 +40,21 @@ const defaultBrowserInputPolicy: ImagePolicy = {
   unknownDimensions: 'reject',
 };
 
+/**
+ * The original-fallback route accepts broader codecs (HEIC/HEIF/AVIF cameras)
+ * but is the broad-codec endpoint of the system: its defaults must never be
+ * looser than the limits a browser-normalized upload already passed.
+ */
+const defaultFallbackInputPolicy: ImagePolicy = {
+  allowedFormats: ['jpeg', 'png', 'webp', 'avif', 'heic', 'heif'],
+  maxInputBytes: 32 * 1024 * 1024,
+  maxSourcePixels: 33_554_432,
+  maxSourceDimension: 8192,
+  maxFrames: 1,
+  allowAnimation: false,
+  unknownDimensions: 'reject',
+};
+
 const allowedIsolation = new Set<NormalizerIsolation>([
   'process',
   'container',
@@ -73,19 +88,12 @@ export function createServerImageIntakeEffect<
         return yield* Effect.fail(new UnsafeNormalizerError({ isolation }));
       }
 
-      const normalized = yield* config.normalizer
-        .normalize({
-          input,
-          source,
-          inspection: inputInspection,
-          output,
-        })
-        .pipe(
-          Effect.timeoutFail({
-            duration: Duration.millis(timeoutMs),
-            onTimeout: () => new ProcessingTimeoutError({ timeoutMs }),
-          }),
-        );
+      const normalized = yield* config.normalizer.normalize({
+        input,
+        source,
+        inspection: inputInspection,
+        output,
+      });
 
       const outputInspection = yield* inspectImage(normalized);
       yield* enforceImagePolicy(outputInspection, outputPolicy(output));
@@ -113,7 +121,13 @@ export function createServerImageIntakeEffect<
         isolation,
         durationMs: performanceNow() - startedAt,
       } satisfies ServerImageResult<Output>;
-    });
+    }).pipe(
+      // No stage of the pipeline may outlive the deadline.
+      Effect.timeoutFail({
+        duration: Duration.millis(timeoutMs),
+        onTimeout: () => new ProcessingTimeoutError({ timeoutMs }),
+      }),
+    );
 
   return {
     process,
@@ -168,20 +182,39 @@ function finiteClamp(
     : fallback;
 }
 
+/**
+ * Object spread lets an explicitly `undefined` key override a layered default,
+ * after which `resolveImagePolicy` falls back to the looser core defaults.
+ * Dropping undefined keys keeps an unconfigured field on the stricter
+ * route-level default instead of silently widening it.
+ */
+function definedPolicy(policy: ImagePolicy | undefined): ImagePolicy {
+  return Object.fromEntries(
+    Object.entries(policy ?? {}).filter(([, value]) => value !== undefined),
+  ) as ImagePolicy;
+}
+
 function inputPolicyFor<Output extends FileLike, Error>(
   source: import('./types.js').ServerImageSource,
   config: EffectServerImageIntakeOptions<Output, Error>,
 ): ImagePolicy {
-  return source === 'browser-normalized'
-    ? {
-        ...defaultBrowserInputPolicy,
-        ...config.inputPolicy,
-        ...config.browserInputPolicy,
-      }
-    : {
-        ...config.inputPolicy,
-        ...config.fallbackInputPolicy,
-      };
+  const routeDefaults =
+    source === 'browser-normalized'
+      ? defaultBrowserInputPolicy
+      : defaultFallbackInputPolicy;
+  const routePolicy =
+    source === 'browser-normalized'
+      ? config.browserInputPolicy
+      : config.fallbackInputPolicy;
+
+  return {
+    ...routeDefaults,
+    ...definedPolicy(config.inputPolicy),
+    ...definedPolicy(routePolicy),
+    // The server is the last tier; unknown dimensions always reject here
+    // regardless of the configured fallback behavior.
+    unknownDimensions: 'reject',
+  };
 }
 
 function performanceNow(): number {

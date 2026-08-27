@@ -1,7 +1,11 @@
 import { it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { describe, expect } from 'vitest';
-import { checkImagePolicy, enforceImagePolicy } from './policy.js';
+import {
+  checkImagePolicy,
+  enforceImagePolicy,
+  resolveImagePolicy,
+} from './policy.js';
 import type { ImageInspection } from './types.js';
 
 describe('image policy', () => {
@@ -19,6 +23,22 @@ describe('image policy', () => {
     expect(decision.issues.map(({ code }) => code)).toContain('PIXEL_LIMIT_EXCEEDED');
     expect(decision.issues.map(({ code }) => code)).toContain(
       'SOURCE_DIMENSION_EXCEEDED',
+    );
+  });
+
+  it('keeps default decode limits within safe memory bounds', () => {
+    const policy = resolveImagePolicy();
+    expect(policy.maxSourcePixels).toBeLessThanOrEqual(33_554_432);
+    expect(policy.maxSourceDimension).toBeLessThanOrEqual(8_192);
+  });
+
+  it('rejects a truthful 10,000×10,000 header under the default policy', () => {
+    const decision = checkImagePolicy(
+      inspection({ width: 10_000, height: 10_000, pixels: 100_000_000 }),
+    );
+    expect(decision.outcome).toBe('reject');
+    expect(decision.issues.map(({ code }) => code)).toContain(
+      'PIXEL_LIMIT_EXCEEDED',
     );
   });
 

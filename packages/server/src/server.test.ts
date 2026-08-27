@@ -71,6 +71,47 @@ describe('server image intake', () => {
     expect(fallback.outputInspection.format).toBe('webp');
   });
 
+  it('bounds the original-fallback route with real limits by default', async () => {
+    let normalizerCalled = false;
+    const intake = createServerImageIntake({
+      normalizer: {
+        isolation: 'external-service',
+        normalize: () => {
+          normalizerCalled = true;
+          return webpFile('output.webp', 10, 10);
+        },
+      },
+    });
+
+    await expect(
+      intake.process(pngFile('bomb.png', 9_999, 9_999), {
+        source: 'original-fallback',
+      }),
+    ).rejects.toMatchObject({ _tag: 'SourceDimensionExceededError' });
+    expect(normalizerCalled).toBe(false);
+  });
+
+  it('ignores undefined policy keys instead of widening limits', async () => {
+    let normalizerCalled = false;
+    const intake = createServerImageIntake({
+      normalizer: {
+        isolation: 'external-service',
+        normalize: () => {
+          normalizerCalled = true;
+          return webpFile('output.webp', 10, 10);
+        },
+      },
+      browserInputPolicy: { maxSourceDimension: 16_000, maxSourcePixels: undefined },
+    });
+
+    // 12,000×12,000 = 144 MP: within the raised dimension cap but far above
+    // the 16.7 MP route default that an undefined pixel key must not erase.
+    await expect(intake.process(pngFile('big.png', 12_000, 12_000))).rejects.toMatchObject(
+      { _tag: 'PixelLimitExceededError' },
+    );
+    expect(normalizerCalled).toBe(false);
+  });
+
   it('rejects a normalizer output that violates the requested format', async () => {
     const intake = createServerImageIntake({
       normalizer: {

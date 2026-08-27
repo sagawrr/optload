@@ -1,5 +1,6 @@
 import {
   DecodeError,
+  DecodedDimensionError,
   EncodeError,
   EnvironmentUnsupportedError,
   type ImageInspection,
@@ -13,11 +14,18 @@ import type {
   TargetDimensions,
 } from './types.js';
 
+/** Source decode bounds enforced against the decoded bitmap, not the header. */
+export interface DecodeLimits {
+  readonly maxDimension: number;
+  readonly maxPixels: number;
+}
+
 export interface LocalProcessorRequest {
   readonly file: File;
   readonly inspection: ImageInspection;
   readonly target: TargetDimensions;
   readonly output: ResolvedImageOutputOptions;
+  readonly limits: DecodeLimits;
 }
 
 export interface LocalProcessorResult {
@@ -32,6 +40,11 @@ export function processOnCurrentThread(
   request: LocalProcessorRequest,
   onProgress?: ImageProgressHandler,
 ): Effect.Effect<LocalProcessorResult, ImageProcessingError> {
+  // The decode is deliberately not resized: createImageBitmap's resize
+  // options apply after the intrinsic-resolution decode, so they would hide
+  // a header that understates the real frame size. Decoding at intrinsic
+  // size lets the limits below verify what the decoder actually produced;
+  // scaling to the target happens on the canvas afterwards.
   const decode = reportProgress(
     onProgress,
     'decode',
@@ -45,9 +58,6 @@ export function processOnCurrentThread(
             imageOrientation: 'from-image',
             premultiplyAlpha: 'default',
             colorSpaceConversion: 'default',
-            resizeWidth: request.target.width,
-            resizeHeight: request.target.height,
-            resizeQuality: 'high',
           }),
         catch: (reason) =>
           new DecodeError({ format: request.inspection.format, reason }),
@@ -59,6 +69,21 @@ export function processOnCurrentThread(
     decode,
     (bitmap) =>
       Effect.gen(function* () {
+        if (
+          bitmap.width > request.limits.maxDimension ||
+          bitmap.height > request.limits.maxDimension ||
+          bitmap.width * bitmap.height > request.limits.maxPixels
+        ) {
+          return yield* Effect.fail(
+            new DecodedDimensionError({
+              width: bitmap.width,
+              height: bitmap.height,
+              maxDimension: request.limits.maxDimension,
+              maxPixels: request.limits.maxPixels,
+            }),
+          );
+        }
+
         yield* reportProgress(
           onProgress,
           'transform',

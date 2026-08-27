@@ -182,6 +182,35 @@ h1 em {
 .result dd { margin: 4px 0 0; overflow: hidden; color: #d7d9de; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .error { color: #ff9b9b; border: 1px solid rgba(255, 100, 100, 0.25); }
 
+.cancel-button {
+  padding: 4px 12px;
+  cursor: pointer;
+  color: #ffb4a9;
+  border: 1px solid rgba(255, 120, 100, 0.35);
+  border-radius: 999px;
+  background: rgba(255, 120, 100, 0.08);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cancel-button:hover { background: rgba(255, 120, 100, 0.16); }
+.cancel-button:focus-visible { outline: 2px solid #ffb4a9; outline-offset: 3px; }
+
+.warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  list-style: none;
+  border: 1px solid rgba(255, 190, 90, 0.25);
+  border-radius: 12px;
+  background: rgba(255, 190, 90, 0.06);
+}
+
+.warnings li { color: #ffd59a; font-size: 12px; line-height: 1.5; }
+.warnings li strong { color: #ffc46b; letter-spacing: 0.04em; }
+
 .drop-overlay {
   position: fixed;
   z-index: 10;

@@ -22,5 +22,14 @@
   },
   "dependencies": {
     "effect": "3.22.1"
-  }
+  },
+  "license": "MIT",
+  "keywords": [
+    "image",
+    "upload",
+    "security",
+    "magic-bytes",
+    "policy",
+    "effect"
+  ]
 }

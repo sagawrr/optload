@@ -1,8 +1,12 @@
 import { it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { describe, expect } from 'vitest';
+import { afterEach, describe, expect, vi } from 'vitest';
 import { createImageIntakeEffect } from './intake.js';
 import { createImageIntake } from './promise-intake.js';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('image intake routing', () => {
   it.effect('routes a recognized HEIC to the explicit fallback', () =>
@@ -88,7 +92,51 @@ describe('image intake routing', () => {
       value: { format: 'heic', cancellable: true },
     });
   });
+
+  it('routes a decoded-dimension breach away from local processing', async () => {
+    // A header can understate the real frame size; the decoder is the
+    // authority on what was actually decoded.
+    let closed = false;
+    vi.stubGlobal(
+      'createImageBitmap',
+      vi.fn(() =>
+        Promise.resolve({
+          width: 30_000,
+          height: 30_000,
+          close: () => {
+            closed = true;
+          },
+        }),
+      ),
+    );
+
+    const reasons: string[] = [];
+    const intake = createImageIntake({
+      execution: 'main-thread',
+      fallback: ({ reason }) => {
+        reasons.push(reason.code);
+        return { routed: true };
+      },
+    });
+
+    const result = await intake.process(jpegFile(100, 100));
+    expect(result).toMatchObject({ kind: 'fallback', value: { routed: true } });
+    expect(reasons).toContain('DECODED_DIMENSION_EXCEEDED');
+    expect(closed).toBe(true);
+  });
 });
+
+function jpegFile(width: number, height: number): File {
+  const bytes = new Uint8Array([
+    0xff, 0xd8,
+    0xff, 0xc0, 0x00, 0x11, 0x08,
+    (height >>> 8) & 0xff, height & 0xff,
+    (width >>> 8) & 0xff, width & 0xff,
+    0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00,
+    0xff, 0xd9,
+  ]);
+  return new File([bytes.buffer], 'photo.jpg', { type: 'image/jpeg' });
+}
 
 function bmffFile(brand: string, width: number, height: number): File {
   const ftyp = box('ftyp', [

@@ -1,5 +1,6 @@
 import {
   DecodeError,
+  DecodedDimensionError,
   EncodeError,
   EnvironmentUnsupportedError,
   ProcessingTimeoutError,
@@ -34,6 +35,16 @@ export function serializeProcessingError(
         _tag: error._tag,
         details: { format: error.format, reason: safeReason(error.reason) },
       };
+    case 'DecodedDimensionError':
+      return {
+        _tag: error._tag,
+        details: {
+          width: error.width,
+          height: error.height,
+          maxDimension: error.maxDimension,
+          maxPixels: error.maxPixels,
+        },
+      };
     case 'EncodeError':
       return {
         _tag: error._tag,
@@ -63,6 +74,13 @@ export function deserializeProcessingError(
       return new DecodeError({
         format: imageFormat(error.details.format),
         reason: error.details.reason,
+      });
+    case 'DecodedDimensionError':
+      return new DecodedDimensionError({
+        width: numberDetail(error.details.width, 0),
+        height: numberDetail(error.details.height, 0),
+        maxDimension: numberDetail(error.details.maxDimension, 0),
+        maxPixels: numberDetail(error.details.maxPixels, 0),
       });
     case 'EncodeError':
       return new EncodeError({

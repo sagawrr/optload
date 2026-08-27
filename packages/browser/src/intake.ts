@@ -7,9 +7,9 @@ import {
   inspectImage,
   runEffectPromise,
   type ImageInspection,
-  type ImagePolicyError,
   type ImageProcessingError,
   type OptloadError,
+  type PolicyIssue,
 } from '@optload/core';
 import { Duration, Effect, Either } from 'effect';
 import { canUseFreshWorker, nativeDecodeCapability } from './capabilities.js';
@@ -23,12 +23,14 @@ import {
 import { notifyProgress, reportProgress } from './progress.js';
 import type {
   ImageFallbackRequest,
+  ImageIntakeError,
   ImagePlan,
   ImageProgressEvent,
   ImageProgressHandler,
   ImageResult,
   LocalExecution,
   ProcessImageOptions,
+  TargetDimensions,
 } from './types.js';
 import type {
   EffectImageIntake,
@@ -42,19 +44,19 @@ interface ExecutedLocalResult extends LocalProcessorResult {
 
 const defaultTimeoutMs = 15_000;
 
+const inspectFile = (file: File) => inspectImage(file);
+
 export function createImageIntakeEffect<
   FallbackValue = never,
   FallbackError = never,
 >(
   config: EffectImageIntakeOptions<FallbackValue, FallbackError> = {},
 ): EffectImageIntake<FallbackValue, FallbackError> {
-  const inspect = (file: File) => inspectImage(file);
-
   const plan = (
     file: File,
     options: ProcessImageOptions = {},
   ): Effect.Effect<ImagePlan, import('@optload/core').InspectionError> =>
-    inspect(file).pipe(
+    inspectFile(file).pipe(
       Effect.flatMap((inspection) => makePlan(inspection, config, options)),
     );
 
@@ -63,14 +65,14 @@ export function createImageIntakeEffect<
     options: ProcessImageOptions = {},
   ): Effect.Effect<
     ImageResult<FallbackValue>,
-    import('./types.js').ImageIntakeError | FallbackError
+    ImageIntakeError | FallbackError
   > => {
     const onProgress = combineProgressHandlers(config.onProgress, options.onProgress);
     const startedAt = performanceNow();
 
     return Effect.gen(function* () {
       yield* reportProgress(onProgress, 'inspect', 0.05, 'Inspecting file…');
-      const inspection = yield* inspect(file);
+      const inspection = yield* inspectFile(file);
       yield* reportProgress(onProgress, 'plan', 0.16, 'Planning safe processing route…');
       const imagePlan = yield* makePlan(inspection, config, options);
 
@@ -81,85 +83,36 @@ export function createImageIntakeEffect<
         return yield* Effect.fail(reason);
       }
 
+      const fallbackContext: FallbackContext<FallbackValue, FallbackError> = {
+        file,
+        inspection,
+        policyIssues: imagePlan.policy.issues,
+        config,
+        onProgress,
+      };
+
       if (imagePlan.route === 'fallback') {
-        return yield* runFallback(
-          file,
-          inspection,
-          imagePlan.reason,
-          imagePlan.policy.issues,
-          config,
-          onProgress,
-        );
+        return yield* runFallback(fallbackContext, imagePlan.reason);
       }
 
       if (!imagePlan.target) {
-        return yield* runFallback(
-          file,
-          inspection,
-          imagePlan.reason,
-          imagePlan.policy.issues,
-          config,
-          onProgress,
-        );
+        return yield* runFallback(fallbackContext, imagePlan.reason);
       }
 
-      const request: LocalProcessorRequest = {
+      return yield* runLocalAttempt({
         file,
         inspection,
+        plan: imagePlan,
         target: imagePlan.target,
-        output: imagePlan.output,
-      };
-      const timeoutMs = validTimeout(config.timeoutMs);
-      const local = executeLocally(
-        request,
-        config.execution ?? 'auto',
+        config,
         onProgress,
-      ).pipe(
-        Effect.timeoutFail({
-          duration: Duration.millis(timeoutMs),
-          onTimeout: () => new ProcessingTimeoutError({ timeoutMs }),
-        }),
-        Effect.either,
-      );
-      const attempted = yield* local;
-
-      if (Either.isLeft(attempted)) {
-        return yield* runFallback(
-          file,
-          inspection,
-          attempted.left,
-          imagePlan.policy.issues,
-          config,
-          onProgress,
-        );
-      }
-
-      const processed = attempted.right;
-      const durationMs = performanceNow() - startedAt;
-      yield* reportProgress(onProgress, 'complete', 1, 'Image ready.');
-      return {
-        kind: 'local',
-        blob: processed.blob,
-        inspection,
-        output: {
-          format: imagePlan.output.format,
-          mediaType: imagePlan.output.mediaType,
-          width: processed.width,
-          height: processed.height,
-          bytes: processed.blob.size,
-        },
-        execution: processed.execution,
-        durationMs,
-        savings:
-          inspection.fileSize > 0
-            ? 1 - processed.blob.size / inspection.fileSize
-            : 0,
-      } as const;
+        startedAt,
+      });
     });
   };
 
   const intake: EffectImageIntake<FallbackValue, FallbackError> = {
-    inspect,
+    inspect: inspectFile,
     plan,
     process,
     attachDropTarget: (target, options) =>
@@ -257,45 +210,125 @@ function executeLocally(
   );
 }
 
+interface FallbackContext<FallbackValue, FallbackError> {
+  readonly file: File;
+  readonly inspection: ImageInspection;
+  readonly policyIssues: readonly PolicyIssue[];
+  readonly config: EffectImageIntakeOptions<FallbackValue, FallbackError>;
+  readonly onProgress: ImageProgressHandler | undefined;
+}
+
 function runFallback<FallbackValue, FallbackError>(
-  file: File,
-  inspection: ImageInspection,
+  context: FallbackContext<FallbackValue, FallbackError>,
   reason: OptloadError | null,
-  policyIssues: readonly import('@optload/core').PolicyIssue[],
-  config: EffectImageIntakeOptions<FallbackValue, FallbackError>,
-  onProgress: ImageProgressHandler | undefined,
 ): Effect.Effect<
   ImageResult<FallbackValue>,
   FallbackError | ServerFallbackRequiredError
 > {
   const actualReason =
     reason ?? new EnvironmentUnsupportedError({ feature: 'local image processing' });
-  if (!config.fallback) {
+  if (!context.config.fallback) {
     return Effect.fail(new ServerFallbackRequiredError({ reason: actualReason }));
   }
 
   const request: ImageFallbackRequest = {
-    file,
-    inspection,
+    file: context.file,
+    inspection: context.inspection,
     reason: actualReason,
-    policyIssues,
+    policyIssues: context.policyIssues,
   };
   return reportProgress(
-    onProgress,
+    context.onProgress,
     'fallback',
     0.3,
     'Using secure server fallback…',
   ).pipe(
-    Effect.zipRight(config.fallback(request)),
+    Effect.zipRight(context.config.fallback(request)),
     Effect.map(
       (value): ImageResult<FallbackValue> => ({
         kind: 'fallback',
         value,
-        inspection,
+        inspection: context.inspection,
         reason: actualReason,
       }),
     ),
   );
+}
+
+interface LocalAttemptContext<FallbackValue, FallbackError> {
+  readonly file: File;
+  readonly inspection: ImageInspection;
+  readonly plan: ImagePlan;
+  readonly target: TargetDimensions;
+  readonly config: EffectImageIntakeOptions<FallbackValue, FallbackError>;
+  readonly onProgress: ImageProgressHandler | undefined;
+  readonly startedAt: number;
+}
+
+function runLocalAttempt<FallbackValue, FallbackError>(
+  context: LocalAttemptContext<FallbackValue, FallbackError>,
+): Effect.Effect<ImageResult<FallbackValue>, ImageIntakeError | FallbackError> {
+  const request: LocalProcessorRequest = {
+    file: context.file,
+    inspection: context.inspection,
+    target: context.target,
+    output: context.plan.output,
+    limits: {
+      maxDimension: context.plan.policy.policy.maxSourceDimension,
+      maxPixels: context.plan.policy.policy.maxSourcePixels,
+    },
+  };
+  const timeoutMs = validTimeout(context.config.timeoutMs);
+  const local = executeLocally(
+    request,
+    context.config.execution ?? 'auto',
+    context.onProgress,
+  ).pipe(
+    Effect.timeoutFail({
+      duration: Duration.millis(timeoutMs),
+      onTimeout: () => new ProcessingTimeoutError({ timeoutMs }),
+    }),
+    Effect.either,
+  );
+
+  return Effect.gen(function* () {
+    const attempted = yield* local;
+
+    if (Either.isLeft(attempted)) {
+      return yield* runFallback(
+        {
+          file: context.file,
+          inspection: context.inspection,
+          policyIssues: context.plan.policy.issues,
+          config: context.config,
+          onProgress: context.onProgress,
+        },
+        attempted.left,
+      );
+    }
+
+    const processed = attempted.right;
+    const durationMs = performanceNow() - context.startedAt;
+    yield* reportProgress(context.onProgress, 'complete', 1, 'Image ready.');
+    return {
+      kind: 'local',
+      blob: processed.blob,
+      inspection: context.inspection,
+      output: {
+        format: context.plan.output.format,
+        mediaType: context.plan.output.mediaType,
+        width: processed.width,
+        height: processed.height,
+        bytes: processed.blob.size,
+      },
+      execution: processed.execution,
+      durationMs,
+      savings:
+        context.inspection.fileSize > 0
+          ? 1 - processed.blob.size / context.inspection.fileSize
+          : 0,
+    } as const;
+  });
 }
 
 function combineProgressHandlers(

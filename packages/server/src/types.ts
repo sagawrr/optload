@@ -58,9 +58,20 @@ export interface ServerImageNormalizer<Output extends FileLike> {
 
 export interface ServerImageIntakeOptions<Output extends FileLike> {
   readonly normalizer: ServerImageNormalizer<Output>;
-  /** Baseline policy merged into both upload routes. */
+  /**
+   * Baseline policy merged into both upload routes. Keys set to `undefined`
+   * are ignored rather than widening a route default.
+   */
   readonly inputPolicy?: ImagePolicy;
+  /**
+   * Overrides for the browser-normalized route, whose defaults allow only
+   * jpeg/png/webp up to 16 MB, 16.7 MP, and 4096 px per side.
+   */
   readonly browserInputPolicy?: ImagePolicy;
+  /**
+   * Overrides for the original-fallback route, whose defaults allow all six
+   * input formats up to 32 MB, 33.5 MP, and 8192 px per side.
+   */
   readonly fallbackInputPolicy?: ImagePolicy;
   readonly output?: ServerOutputOptions;
   readonly timeoutMs?: number;

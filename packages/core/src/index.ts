@@ -1,6 +1,7 @@
 export {
   AnimationNotAllowedError,
   DecodeError,
+  DecodedDimensionError,
   DimensionsUnknownError,
   EncodeError,
   EnvironmentUnsupportedError,

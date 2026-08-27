@@ -67,11 +67,16 @@ const defaultAllowedFormats: readonly SupportedInputFormat[] = [
   'heif',
 ];
 
+/**
+ * Decode limits default to values that survive a lying or hostile header on
+ * memory-constrained devices: 33,554,432 pixels still admits every 8K frame
+ * (7680×4320 = 33.2 MP) while capping a decoded bitmap near 128 MB of RGBA.
+ */
 export const defaultImagePolicy: ResolvedImagePolicy = Object.freeze({
   allowedFormats: defaultAllowedFormats,
   maxInputBytes: 32 * 1024 * 1024,
-  maxSourcePixels: 100_000_000,
-  maxSourceDimension: 32_768,
+  maxSourcePixels: 33_554_432,
+  maxSourceDimension: 8_192,
   maxFrames: 1,
   allowAnimation: false,
   unknownDimensions: 'fallback',
@@ -91,103 +96,161 @@ export function resolveImagePolicy(policy: ImagePolicy = {}): ResolvedImagePolic
   };
 }
 
-export function checkImagePolicy(
+function formatPolicyIssue(
   inspection: ImageInspection,
-  inputPolicy: ImagePolicy = {},
-): ImagePolicyDecision {
-  const policy = resolveImagePolicy(inputPolicy);
-  const rejected: PolicyIssue[] = [];
-  const fallback: PolicyIssue[] = [];
-
-  if (!inspection.format || !policy.allowedFormats.includes(inspection.format)) {
-    rejected.push({
-      code: 'UNSUPPORTED_FORMAT',
-      message: inspection.format
-        ? `The detected ${inspection.format} format is not allowed by this pipeline.`
-        : 'The file format could not be identified.',
-      details: { format: inspection.format },
-    });
+  policy: ResolvedImagePolicy,
+): PolicyIssue | null {
+  if (inspection.format && policy.allowedFormats.includes(inspection.format)) {
+    return null;
   }
+  return {
+    code: 'UNSUPPORTED_FORMAT',
+    message: inspection.format
+      ? `The detected ${inspection.format} format is not allowed by this pipeline.`
+      : 'The file format could not be identified.',
+    details: { format: inspection.format },
+  };
+}
 
-  if (inspection.fileSize > policy.maxInputBytes) {
-    rejected.push({
-      code: 'INPUT_TOO_LARGE',
-      message: `The file exceeds the ${policy.maxInputBytes}-byte input limit.`,
-      details: { actual: inspection.fileSize, maximum: policy.maxInputBytes },
-    });
-  }
+function inputSizeIssue(
+  inspection: ImageInspection,
+  policy: ResolvedImagePolicy,
+): PolicyIssue | null {
+  if (inspection.fileSize <= policy.maxInputBytes) return null;
+  return {
+    code: 'INPUT_TOO_LARGE',
+    message: `The file exceeds the ${policy.maxInputBytes}-byte input limit.`,
+    details: { actual: inspection.fileSize, maximum: policy.maxInputBytes },
+  };
+}
 
+interface DimensionCheck {
+  readonly rejected: readonly PolicyIssue[];
+  readonly fallback: readonly PolicyIssue[];
+}
+
+function hasSafeDimensions(
+  inspection: ImageInspection,
+): inspection is ImageInspection & {
+  readonly width: number;
+  readonly height: number;
+  readonly pixels: number;
+} {
+  return (
+    inspection.width !== null &&
+    inspection.height !== null &&
+    inspection.pixels !== null &&
+    Number.isSafeInteger(inspection.width) &&
+    Number.isSafeInteger(inspection.height) &&
+    inspection.width > 0 &&
+    inspection.height > 0 &&
+    Number.isSafeInteger(inspection.pixels)
+  );
+}
+
+function dimensionIssues(
+  inspection: ImageInspection,
+  policy: ResolvedImagePolicy,
+): DimensionCheck {
+  const unknownDimensions: PolicyIssue = {
+    code: 'DIMENSIONS_UNKNOWN',
+    message: 'The image dimensions must be resolved before local processing.',
+    details: {},
+  };
   if (inspection.width === null || inspection.height === null) {
-    const issue: PolicyIssue = {
-      code: 'DIMENSIONS_UNKNOWN',
-      message: 'The image dimensions must be resolved before local processing.',
-      details: {},
+    return policy.unknownDimensions === 'reject'
+      ? { rejected: [unknownDimensions], fallback: [] }
+      : { rejected: [], fallback: [unknownDimensions] };
+  }
+
+  if (!hasSafeDimensions(inspection)) {
+    return {
+      rejected: [
+        {
+          code: 'INVALID_DIMENSIONS',
+          message: 'The image declares invalid or unsafe dimensions.',
+          details: {
+            width: inspection.width,
+            height: inspection.height,
+            pixels: inspection.pixels,
+          },
+        },
+      ],
+      fallback: [],
     };
-    if (policy.unknownDimensions === 'reject') rejected.push(issue);
-    else fallback.push(issue);
-  } else if (
-    !Number.isSafeInteger(inspection.width) ||
-    !Number.isSafeInteger(inspection.height) ||
-    inspection.width <= 0 ||
-    inspection.height <= 0 ||
-    inspection.pixels === null ||
-    !Number.isSafeInteger(inspection.pixels)
+  }
+
+  const rejected: PolicyIssue[] = [];
+  if (
+    inspection.width > policy.maxSourceDimension ||
+    inspection.height > policy.maxSourceDimension
   ) {
     rejected.push({
-      code: 'INVALID_DIMENSIONS',
-      message: 'The image declares invalid or unsafe dimensions.',
+      code: 'SOURCE_DIMENSION_EXCEEDED',
+      message: `The image exceeds the ${policy.maxSourceDimension}px source-dimension limit.`,
       details: {
         width: inspection.width,
         height: inspection.height,
-        pixels: inspection.pixels,
+        maximum: policy.maxSourceDimension,
       },
     });
-  } else {
-    if (
-      inspection.width > policy.maxSourceDimension ||
-      inspection.height > policy.maxSourceDimension
-    ) {
-      rejected.push({
-        code: 'SOURCE_DIMENSION_EXCEEDED',
-        message: `The image exceeds the ${policy.maxSourceDimension}px source-dimension limit.`,
-        details: {
-          width: inspection.width,
-          height: inspection.height,
-          maximum: policy.maxSourceDimension,
-        },
-      });
-    }
-
-    if (inspection.pixels !== null && inspection.pixels > policy.maxSourcePixels) {
-      rejected.push({
-        code: 'PIXEL_LIMIT_EXCEEDED',
-        message: `The image exceeds the ${policy.maxSourcePixels}-pixel source limit.`,
-        details: { actual: inspection.pixels, maximum: policy.maxSourcePixels },
-      });
-    }
   }
 
-  if (inspection.animated === true && !policy.allowAnimation) {
+  if (inspection.pixels > policy.maxSourcePixels) {
     rejected.push({
+      code: 'PIXEL_LIMIT_EXCEEDED',
+      message: `The image exceeds the ${policy.maxSourcePixels}-pixel source limit.`,
+      details: { actual: inspection.pixels, maximum: policy.maxSourcePixels },
+    });
+  }
+
+  return { rejected, fallback: [] };
+}
+
+function animationIssues(
+  inspection: ImageInspection,
+  policy: ResolvedImagePolicy,
+): readonly PolicyIssue[] {
+  const issues: PolicyIssue[] = [];
+  if (inspection.animated === true && !policy.allowAnimation) {
+    issues.push({
       code: 'ANIMATION_NOT_ALLOWED',
       message: 'Animated images are not enabled for this pipeline.',
       details: { frameCount: inspection.frameCount },
     });
   }
-
   if (inspection.frameCount !== null && inspection.frameCount > policy.maxFrames) {
-    rejected.push({
+    issues.push({
       code: 'FRAME_LIMIT_EXCEEDED',
       message: `The image exceeds the ${policy.maxFrames}-frame limit.`,
       details: { actual: inspection.frameCount, maximum: policy.maxFrames },
     });
   }
+  return issues;
+}
+
+function isPolicyIssue(issue: PolicyIssue | null): issue is PolicyIssue {
+  return issue !== null;
+}
+
+export function checkImagePolicy(
+  inspection: ImageInspection,
+  inputPolicy: ImagePolicy = {},
+): ImagePolicyDecision {
+  const policy = resolveImagePolicy(inputPolicy);
+  const dimensions = dimensionIssues(inspection, policy);
+  const rejected = [
+    formatPolicyIssue(inspection, policy),
+    inputSizeIssue(inspection, policy),
+    ...dimensions.rejected,
+    ...animationIssues(inspection, policy),
+  ].filter(isPolicyIssue);
 
   if (rejected.length > 0) {
     return { outcome: 'reject', policy, issues: rejected };
   }
-  if (fallback.length > 0) {
-    return { outcome: 'fallback', policy, issues: fallback };
+  if (dimensions.fallback.length > 0) {
+    return { outcome: 'fallback', policy, issues: dimensions.fallback };
   }
   return { outcome: 'accept', policy, issues: [] };
 }

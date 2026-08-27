@@ -1,0 +1,49 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "import", "promise"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "error",
+    "pedantic": "off",
+    "restriction": "off",
+    "style": "off",
+    "nursery": "off"
+  },
+  "rules": {
+    "complexity": ["error", { "max": 15 }],
+    "max-depth": ["error", 4],
+    "max-params": ["error", 5],
+    "max-nested-callbacks": ["error", 4],
+    "max-lines-per-function": ["error", { "max": 120 }],
+    "unicorn/max-nested-calls": ["error", { "max": 6 }],
+    "no-new-func": "error",
+    "no-proto": "error",
+    "no-script-url": "error",
+    "no-prototype-builtins": "error",
+    "no-object-constructor": "error",
+    "typescript/no-unused-vars": [
+      "error",
+      { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }
+    ],
+    "no-underscore-dangle": "off",
+    "no-await-in-loop": "off",
+    "unicorn/require-post-message-target-origin": "off"
+  },
+  "ignorePatterns": ["**/dist/", "coverage/"],
+  "overrides": [
+    {
+      "files": ["examples/**/*.ts"],
+      "rules": {
+        "import/no-unassigned-import": "off"
+      }
+    },
+    {
+      "files": ["**/*.test.ts"],
+      "rules": {
+        "unicorn/no-useless-undefined": "off",
+        "max-lines-per-function": ["error", { "max": 300 }]
+      }
+    }
+  ]
+}

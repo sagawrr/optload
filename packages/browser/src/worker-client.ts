@@ -43,19 +43,22 @@ export function processInFreshWorker(
         };
         signal.addEventListener('abort', cleanup, { once: true });
 
-        worker.onmessage = (event: MessageEvent<WorkerProcessResponse>) => {
-          if (settled) return;
-          const response = event.data;
-          if (response._tag === 'Progress') {
-            notifyProgress(onProgress, response.event);
-            return;
-          }
-          settled = true;
-          cleanup();
-          if (response._tag === 'Success') resolve(response.result);
-          else reject(deserializeProcessingError(response.error));
-        };
-        worker.onerror = (event) => {
+        worker.addEventListener(
+          'message',
+          (event: MessageEvent<WorkerProcessResponse>) => {
+            if (settled) return;
+            const response = event.data;
+            if (response._tag === 'Progress') {
+              notifyProgress(onProgress, response.event);
+              return;
+            }
+            settled = true;
+            cleanup();
+            if (response._tag === 'Success') resolve(response.result);
+            else reject(deserializeProcessingError(response.error));
+          },
+        );
+        worker.addEventListener('error', (event) => {
           if (settled) return;
           settled = true;
           cleanup();
@@ -65,7 +68,18 @@ export function processInFreshWorker(
               reason: event.error ?? event.message,
             }),
           );
-        };
+        });
+        worker.addEventListener('messageerror', () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reject(
+            new EnvironmentUnsupportedError({
+              feature: 'module workers',
+              reason: 'The worker response could not be deserialized.',
+            }),
+          );
+        });
 
         const message: WorkerProcessRequest = { _tag: 'Process', request };
         worker.postMessage(message);

@@ -30,7 +30,7 @@ export function attachDropTarget<FallbackValue>(
     if (dragEvent.dataTransfer) dragEvent.dataTransfer.dropEffect = 'copy';
   };
 
-  const onDragLeave = (event: Event): void => {
+  const onDragLeave = (_event: Event): void => {
     if (depth === 0) return;
     depth = Math.max(0, depth - 1);
     if (depth === 0) reportActive(options, false);

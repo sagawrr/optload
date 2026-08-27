@@ -8,9 +8,12 @@ Optload treats an upload as untrusted bytes, not as whatever its extension or
 processing route, normalizes supported images in a fresh worker, and makes the
 server path explicit when the browser cannot safely finish the job.
 
-> Early alpha. The browser pipeline and server orchestration work end to end;
-> production decoder adapters and the cross-browser compatibility matrix are
-> still being built.
+> The browser pipeline and server orchestration are end to end and
+> security-hardened: bounded header inspection with defensive read limits,
+> post-decode dimension verification, per-route server policies, and deadlines
+> covering every pipeline stage. Server decoder adapters are integrator-supplied
+> isolated processes by design; the cross-browser matrix is tracked in
+> [SECURITY.md](./SECURITY.md).
 
 ## Why hybrid
 
@@ -34,7 +37,9 @@ server must remain the authority that decides what gets stored or served.
 - `@optload/server` — independent re-inspection, isolated-normalizer
   orchestration, deadlines, and output verification, with Promise and Effect
   entry points.
-- `@optload/playground` — runnable Vite example.
+- `@optload/playground` — runnable Vite example demonstrating every scenario:
+  the local worker route, the server fallback route, active-content rejection,
+  mid-flight cancellation, and inspection warnings for mismatched files.
 
 Effect is pinned to the latest stable 3.x release rather than the 4.x release
 candidate. It powers cancellation, typed failures, resource cleanup, and
@@ -62,7 +67,7 @@ import { createImageIntake } from "@optload/browser"
 const images = createImageIntake({
   policy: {
     maxInputBytes: 32 * 1024 * 1024,
-    maxSourcePixels: 100_000_000,
+    maxSourcePixels: 33_554_432,
     allowAnimation: false,
   },
   output: {
@@ -145,6 +150,9 @@ worker. They never silently downgrade to UI-thread decoding. Use
 - JPEG, PNG, WebP, AVIF, HEIC, and HEIF are recognized input formats.
 - SVG, unknown formats, oversize files, decompression-bomb dimensions, and
   animation are rejected by default.
+- Default intake limits are 32 MB, 33.5 MP, and 8,192 px per side; the decoded
+  bitmap is re-verified against the pixel and dimension limits after decode,
+  because a header can understate the real frame size.
 - Unknown dimensions and unavailable native codecs require server fallback.
 - Only a bounded file prefix is read during preflight.
 - One fresh worker processes one image and is then terminated.
@@ -165,5 +173,10 @@ resource limits, worker isolation, or server validation.
 pnpm install
 pnpm test
 pnpm typecheck
+pnpm lint
 pnpm dev
 ```
+
+`pnpm lint` runs oxlint with complexity ceilings (cyclomatic complexity ≤ 15,
+depth/params/nesting caps), security rules (no `eval`-adjacent constructs,
+prototype pollution vectors), and every enabled rule at error severity.

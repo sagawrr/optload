@@ -113,6 +113,23 @@ export class DecodeError extends Data.TaggedError('DecodeError')<{
     : 'The browser could not decode the image.';
 }
 
+/**
+ * The decoder produced dimensions that exceed policy, which means the
+ * inspected header disagreed with (or understated) the real frame size.
+ */
+export class DecodedDimensionError extends Data.TaggedError(
+  'DecodedDimensionError',
+)<{
+  readonly width: number;
+  readonly height: number;
+  readonly maxDimension: number;
+  readonly maxPixels: number;
+}> {
+  readonly code = 'DECODED_DIMENSION_EXCEEDED' as const;
+  readonly stage = 'decode' as const;
+  override readonly message = `The decoded image is ${this.width}×${this.height}, exceeding the ${this.maxDimension}px-per-side or ${this.maxPixels}-pixel decode limit.`;
+}
+
 export class EncodeError extends Data.TaggedError('EncodeError')<{
   readonly mediaType: string;
   readonly reason: unknown;
@@ -165,6 +182,7 @@ export type ImagePolicyError =
 
 export type ImageProcessingError =
   | DecodeError
+  | DecodedDimensionError
   | EncodeError
   | ProcessingTimeoutError
   | EnvironmentUnsupportedError;

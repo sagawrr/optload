@@ -18,11 +18,35 @@ describe('inspectImageBytes', () => {
       pixels: 960_000,
       hasAlpha: true,
       animated: false,
+      frameCount: 1,
     });
     expect(result.warnings.map(({ code }) => code)).toEqual([
       'declared_type_mismatch',
       'extension_mismatch',
     ]);
+  });
+
+  it('reports animation as unknown when the inspected prefix ends before IDAT', () => {
+    // acTL must precede the first IDAT, so a prefix that stops earlier cannot
+    // rule out a hidden animation chunk.
+    const ihdrOnly = pngHeader(1200, 800, 6).subarray(0, 33);
+    const prefix = new Uint8Array(ihdrOnly.length + 12);
+    prefix.set(ihdrOnly, 0);
+    writeU32be(prefix, ihdrOnly.length, 600_000);
+    prefix.set(ascii('prVt'), ihdrOnly.length + 4);
+
+    const result = inspectImageBytes(prefix, {
+      fileSize: 700_000,
+      fileName: 'maybe-apng.png',
+      headerWasTruncated: true,
+    });
+
+    expect(result.format).toBe('png');
+    expect(result.animated).toBeNull();
+    expect(result.frameCount).toBeNull();
+    expect(result.warnings.map(({ code }) => code)).toContain(
+      'animation_unknown',
+    );
   });
 
   it('detects JPEG dimensions without trusting its extension', () => {
@@ -119,7 +143,7 @@ describe('inspectImageBytes', () => {
 });
 
 function pngHeader(width: number, height: number, colorType: number): Uint8Array {
-  const bytes = new Uint8Array(33);
+  const bytes = new Uint8Array(47);
   bytes.set([137, 80, 78, 71, 13, 10, 26, 10]);
   writeU32be(bytes, 8, 13);
   bytes.set(ascii('IHDR'), 12);
@@ -127,6 +151,9 @@ function pngHeader(width: number, height: number, colorType: number): Uint8Array
   writeU32be(bytes, 20, height);
   bytes[24] = 8;
   bytes[25] = colorType;
+  writeU32be(bytes, 33, 2);
+  bytes.set(ascii('IDAT'), 37);
+  bytes.set([0x78, 0x9c], 41);
   return bytes;
 }
 

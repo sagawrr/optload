@@ -51,6 +51,9 @@
               <button id="try-fallback" class="sample-button" type="button">
                 Try fallback route
               </button>
+              <button id="try-reject" class="sample-button" type="button">
+                Try rejection
+              </button>
             </div>
             <small>JPEG · PNG · WebP · AVIF · HEIC/HEIF</small>
           </div>
@@ -59,6 +62,9 @@
             <div class="status-row">
               <span id="status-message">Inspecting…</span>
               <span id="status-percent">0%</span>
+              <button id="cancel" class="cancel-button" type="button" hidden>
+                Cancel
+              </button>
             </div>
             <div class="progress-track" aria-hidden="true">
               <div id="progress-bar" class="progress-bar"></div>
@@ -72,6 +78,7 @@
             <div class="result-copy">
               <p id="route" class="eyebrow"></p>
               <h2 id="file-name"></h2>
+              <ul id="warnings" class="warnings" hidden></ul>
               <dl>
                 <div><dt>Input</dt><dd id="input-info"></dd></div>
                 <div><dt>Output</dt><dd id="output-info"></dd></div>

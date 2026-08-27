@@ -3,8 +3,12 @@
   "version": "0.1.0",
   "description": "Effect-powered browser image intake with Promise-first and native Effect APIs.",
   "type": "module",
-  "sideEffects": false,
-  "files": ["dist"],
+  "sideEffects": [
+    "**/dist/worker.js"
+  ],
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -22,5 +26,15 @@
   "dependencies": {
     "@optload/core": "workspace:*",
     "effect": "3.22.1"
-  }
+  },
+  "license": "MIT",
+  "keywords": [
+    "image",
+    "upload",
+    "resize",
+    "webp",
+    "worker",
+    "security",
+    "effect"
+  ]
 }

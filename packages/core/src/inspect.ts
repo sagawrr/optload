@@ -38,8 +38,12 @@ export function inspectImage(
       try: () => file.slice(0, bytesToRead).arrayBuffer(),
       catch: (reason) => new InspectionReadError({ reason }),
     });
+    // A misbehaving FileLike could hand back more than was asked for; never
+    // inspect beyond the requested bound regardless of what slice returns.
+    const bytes = new Uint8Array(buffer);
+    const bounded = bytes.length > bytesToRead ? bytes.subarray(0, bytesToRead) : bytes;
 
-    return inspectImageBytes(new Uint8Array(buffer), {
+    return inspectImageBytes(bounded, {
       fileSize: file.size,
       fileName: file.name,
       declaredMediaType: file.type,

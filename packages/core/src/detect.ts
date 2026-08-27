@@ -128,6 +128,19 @@ function parseExifOrientation(
   return null;
 }
 
+function isJpegStreamEnd(marker: number): boolean {
+  return marker === 0xd9 || marker === 0xda;
+}
+
+function isJpegStandaloneMarker(marker: number): boolean {
+  return marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7);
+}
+
+function skipFillBytes(bytes: Uint8Array, offset: number): number {
+  while (byte(bytes, offset) === 0xff) offset += 1;
+  return offset;
+}
+
 function detectJpeg(bytes: Uint8Array): DetectedHeader | null {
   if (!matches(bytes, 0, [0xff, 0xd8, 0xff])) return null;
 
@@ -137,11 +150,11 @@ function detectJpeg(bytes: Uint8Array): DetectedHeader | null {
   let offset = 2;
 
   while (offset + 4 <= bytes.length) {
-    while (byte(bytes, offset) === 0xff) offset += 1;
+    offset = skipFillBytes(bytes, offset);
     const marker = byte(bytes, offset);
     offset += 1;
-    if (marker === 0xd9 || marker === 0xda) break;
-    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (isJpegStreamEnd(marker)) break;
+    if (isJpegStandaloneMarker(marker)) continue;
     if (offset + 2 > bytes.length) break;
 
     const segmentLength = u16be(bytes, offset);
@@ -187,8 +200,9 @@ function detectPng(bytes: Uint8Array): DetectedHeader | null {
   const width = bytes.length >= 24 ? u32be(bytes, 16) : null;
   const height = bytes.length >= 24 ? u32be(bytes, 20) : null;
   const colorType = bytes.length >= 26 ? byte(bytes, 25) : null;
-  let frameCount = 1;
-  let animated = false;
+  let frameCount: number | null = null;
+  let animated: boolean | null = null;
+  let sawIdat = false;
   let offset = 8;
 
   while (offset + 12 <= bytes.length) {
@@ -201,7 +215,18 @@ function detectPng(bytes: Uint8Array): DetectedHeader | null {
       animated = frameCount > 1;
       break;
     }
+    if (type === 'IDAT') {
+      // The APNG spec requires acTL before the first IDAT, so reaching IDAT
+      // without one rules animation out.
+      sawIdat = true;
+      break;
+    }
     offset = next;
+  }
+
+  if (frameCount === null && sawIdat) {
+    frameCount = 1;
+    animated = false;
   }
 
   return {
@@ -235,14 +260,60 @@ function detectGif(bytes: Uint8Array): DetectedHeader | null {
   };
 }
 
+interface WebpHeader {
+  width: number | null;
+  height: number | null;
+  hasAlpha: boolean | null;
+  animated: boolean;
+  frames: number;
+}
+
+function applyWebpChunk(
+  bytes: Uint8Array,
+  type: string,
+  payload: number,
+  length: number,
+  header: WebpHeader,
+): void {
+  if (type === 'VP8X' && length >= 10) {
+    const flags = byte(bytes, payload);
+    header.hasAlpha = (flags & 0x10) !== 0;
+    header.animated = (flags & 0x02) !== 0;
+    header.width = u24le(bytes, payload + 4) + 1;
+    header.height = u24le(bytes, payload + 7) + 1;
+    return;
+  }
+  if (type === 'VP8 ' && length >= 10) {
+    if (matches(bytes, payload + 3, [0x9d, 0x01, 0x2a])) {
+      header.width = u16le(bytes, payload + 6) & 0x3fff;
+      header.height = u16le(bytes, payload + 8) & 0x3fff;
+      header.hasAlpha ??= false;
+    }
+    return;
+  }
+  if (type === 'VP8L' && length >= 5 && byte(bytes, payload) === 0x2f) {
+    const bits = u32le(bytes, payload + 1) >>> 0;
+    header.width = (bits & 0x3fff) + 1;
+    header.height = ((bits >>> 14) & 0x3fff) + 1;
+    header.hasAlpha = ((bits >>> 28) & 1) === 1;
+    return;
+  }
+  if (type === 'ANMF') {
+    header.frames += 1;
+    header.animated = true;
+  }
+}
+
 function detectWebp(bytes: Uint8Array): DetectedHeader | null {
   if (ascii(bytes, 0, 4) !== 'RIFF' || ascii(bytes, 8, 4) !== 'WEBP') return null;
 
-  let width: number | null = null;
-  let height: number | null = null;
-  let hasAlpha: boolean | null = null;
-  let animated: boolean | null = false;
-  let frames = 0;
+  const header: WebpHeader = {
+    width: null,
+    height: null,
+    hasAlpha: null,
+    animated: false,
+    frames: 0,
+  };
   let offset = 12;
 
   while (offset + 8 <= bytes.length) {
@@ -252,38 +323,17 @@ function detectWebp(bytes: Uint8Array): DetectedHeader | null {
     const next = payload + length + (length % 2);
     if (!Number.isSafeInteger(next) || next > bytes.length) break;
 
-    if (type === 'VP8X' && length >= 10) {
-      const flags = byte(bytes, payload);
-      hasAlpha = (flags & 0x10) !== 0;
-      animated = (flags & 0x02) !== 0;
-      width = u24le(bytes, payload + 4) + 1;
-      height = u24le(bytes, payload + 7) + 1;
-    } else if (type === 'VP8 ' && length >= 10) {
-      if (matches(bytes, payload + 3, [0x9d, 0x01, 0x2a])) {
-        width = u16le(bytes, payload + 6) & 0x3fff;
-        height = u16le(bytes, payload + 8) & 0x3fff;
-        hasAlpha ??= false;
-      }
-    } else if (type === 'VP8L' && length >= 5 && byte(bytes, payload) === 0x2f) {
-      const bits = u32le(bytes, payload + 1) >>> 0;
-      width = (bits & 0x3fff) + 1;
-      height = ((bits >>> 14) & 0x3fff) + 1;
-      hasAlpha = ((bits >>> 28) & 1) === 1;
-    } else if (type === 'ANMF') {
-      frames += 1;
-      animated = true;
-    }
-
+    applyWebpChunk(bytes, type, payload, length, header);
     offset = next;
   }
 
   return {
     format: 'webp',
-    width,
-    height,
-    frameCount: animated ? (frames > 0 ? frames : null) : 1,
-    animated,
-    hasAlpha,
+    width: header.width,
+    height: header.height,
+    frameCount: header.animated ? (header.frames > 0 ? header.frames : null) : 1,
+    animated: header.animated,
+    hasAlpha: header.hasAlpha,
     orientation: null,
   };
 }
@@ -299,6 +349,31 @@ const bmffContainerTypes = new Set([
   'stbl',
 ]);
 
+interface BoxHeader {
+  readonly size: number;
+  readonly headerSize: number;
+}
+
+/** Reads a BMFF box length, resolving the 64-bit and to-end-of-stream forms. */
+function readBoxHeader(
+  bytes: Uint8Array,
+  offset: number,
+  end: number,
+): BoxHeader | null {
+  let size = u32be(bytes, offset);
+  let headerSize = 8;
+
+  if (size === 1) {
+    if (offset + 16 > end || u32be(bytes, offset + 8) !== 0) return null;
+    size = u32be(bytes, offset + 12);
+    headerSize = 16;
+  } else if (size === 0) {
+    size = end - offset;
+  }
+
+  return { size, headerSize };
+}
+
 function findIspeDimensions(
   bytes: Uint8Array,
   start: number,
@@ -309,38 +384,59 @@ function findIspeDimensions(
   let offset = start;
 
   while (offset + 8 <= end && offset + 8 <= bytes.length) {
-    let size = u32be(bytes, offset);
-    const type = ascii(bytes, offset + 4, 4);
-    let headerSize = 8;
-
-    if (size === 1) {
-      if (offset + 16 > end || u32be(bytes, offset + 8) !== 0) return null;
-      size = u32be(bytes, offset + 12);
-      headerSize = 16;
-    } else if (size === 0) {
-      size = end - offset;
-    }
-
-    if (size < headerSize || offset + size > end || offset + size > bytes.length) {
+    const header = readBoxHeader(bytes, offset, end);
+    if (
+      !header ||
+      header.size < header.headerSize ||
+      offset + header.size > end ||
+      offset + header.size > bytes.length
+    ) {
       return null;
     }
 
-    if (type === 'ispe' && size >= headerSize + 12) {
+    const type = ascii(bytes, offset + 4, 4);
+    if (type === 'ispe' && header.size >= header.headerSize + 12) {
       return {
-        width: u32be(bytes, offset + headerSize + 4),
-        height: u32be(bytes, offset + headerSize + 8),
+        width: u32be(bytes, offset + header.headerSize + 4),
+        height: u32be(bytes, offset + header.headerSize + 8),
       };
     }
 
     if (bmffContainerTypes.has(type)) {
-      const childStart = offset + headerSize + (type === 'meta' ? 4 : 0);
-      const found = findIspeDimensions(bytes, childStart, offset + size, depth + 1);
+      const childStart = offset + header.headerSize + (type === 'meta' ? 4 : 0);
+      const found = findIspeDimensions(bytes, childStart, offset + header.size, depth + 1);
       if (found) return found;
     }
 
-    offset += size;
+    offset += header.size;
   }
 
+  return null;
+}
+
+function collectBrands(bytes: Uint8Array, boxSize: number): ReadonlySet<string> {
+  const brands = new Set<string>([ascii(bytes, 8, 4)]);
+  for (let offset = 16; offset + 4 <= boxSize; offset += 4) {
+    brands.add(ascii(bytes, offset, 4));
+  }
+  return brands;
+}
+
+interface BmffFormat {
+  readonly format: ImageFormat;
+  readonly animated: boolean | null;
+}
+
+function brandFormat(brands: ReadonlySet<string>): BmffFormat | null {
+  const has = (set: ReadonlySet<string>): boolean =>
+    [...brands].some((brand) => set.has(brand));
+
+  if (has(avifSequenceBrands)) return { format: 'avif', animated: true };
+  if (has(avifBrands)) return { format: 'avif', animated: false };
+  if (has(heicSequenceBrands)) return { format: 'heic', animated: true };
+  if (has(heicBrands)) return { format: 'heic', animated: false };
+  if (has(heifSequenceBrands)) return { format: 'heif', animated: true };
+  if (has(heifBrands)) return { format: 'heif', animated: null };
   return null;
 }
 
@@ -349,45 +445,16 @@ function detectBmff(bytes: Uint8Array): DetectedHeader | null {
   const boxSize = u32be(bytes, 0);
   if (boxSize < 16 || boxSize > bytes.length) return null;
 
-  const brands = new Set<string>([ascii(bytes, 8, 4)]);
-  for (let offset = 16; offset + 4 <= boxSize; offset += 4) {
-    brands.add(ascii(bytes, offset, 4));
-  }
-
-  const hasBrand = (set: ReadonlySet<string>): boolean =>
-    [...brands].some((brand) => set.has(brand));
-
-  let format: ImageFormat | null = null;
-  let animated: boolean | null = null;
-  if (hasBrand(avifSequenceBrands)) {
-    format = 'avif';
-    animated = true;
-  } else if (hasBrand(avifBrands)) {
-    format = 'avif';
-    animated = false;
-  } else if (hasBrand(heicSequenceBrands)) {
-    format = 'heic';
-    animated = true;
-  } else if (hasBrand(heicBrands)) {
-    format = 'heic';
-    animated = false;
-  } else if (hasBrand(heifSequenceBrands)) {
-    format = 'heif';
-    animated = true;
-  } else if (hasBrand(heifBrands)) {
-    format = 'heif';
-    animated = null;
-  }
-
-  if (!format) return null;
+  const identified = brandFormat(collectBrands(bytes, boxSize));
+  if (!identified) return null;
   const dimensions = findIspeDimensions(bytes, boxSize, bytes.length);
 
   return {
-    format,
+    format: identified.format,
     width: dimensions?.width ?? null,
     height: dimensions?.height ?? null,
-    frameCount: animated === false ? 1 : null,
-    animated,
+    frameCount: identified.animated === false ? 1 : null,
+    animated: identified.animated,
     hasAlpha: null,
     orientation: null,
   };
@@ -488,23 +555,19 @@ function extensionFromName(fileName: string | undefined): string | null {
   return fileName.slice(lastDot + 1).toLowerCase();
 }
 
-export function inspectImageBytes(
-  bytes: Uint8Array,
-  context: DetectContext,
-): ImageInspection {
-  const detected = detectHeader(bytes);
-  const extension = extensionFromName(context.fileName);
-  const declaredMediaType = context.declaredMediaType?.toLowerCase() || null;
+function inspectionWarnings(
+  detected: DetectedHeader,
+  extension: string | null,
+  declaredMediaType: string | null,
+  headerWasTruncated: boolean | undefined,
+): InspectionWarning[] {
   const warnings: InspectionWarning[] = [];
+  const mediaType = detected.format ? formatMediaTypes[detected.format] : null;
 
-  if (
-    detected.format &&
-    declaredMediaType &&
-    declaredMediaType !== formatMediaTypes[detected.format]
-  ) {
+  if (detected.format && declaredMediaType && declaredMediaType !== mediaType) {
     warnings.push({
       code: 'declared_type_mismatch',
-      message: `The file declares ${declaredMediaType}, but its bytes identify as ${formatMediaTypes[detected.format]}.`,
+      message: `The file declares ${declaredMediaType}, but its bytes identify as ${mediaType}.`,
     });
   }
 
@@ -533,12 +596,29 @@ export function inspectImageBytes(
     });
   }
 
-  if (context.headerWasTruncated) {
+  if (headerWasTruncated) {
     warnings.push({
       code: 'header_truncated',
       message: 'Only a bounded prefix of the file was inspected.',
     });
   }
+
+  return warnings;
+}
+
+export function inspectImageBytes(
+  bytes: Uint8Array,
+  context: DetectContext,
+): ImageInspection {
+  const detected = detectHeader(bytes);
+  const extension = extensionFromName(context.fileName);
+  const declaredMediaType = context.declaredMediaType?.toLowerCase() || null;
+  const warnings = inspectionWarnings(
+    detected,
+    extension,
+    declaredMediaType,
+    context.headerWasTruncated,
+  );
 
   const pixels =
     detected.width !== null && detected.height !== null
