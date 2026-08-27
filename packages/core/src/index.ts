@@ -1,0 +1,53 @@
+export {
+  AnimationNotAllowedError,
+  DecodeError,
+  DimensionsUnknownError,
+  EncodeError,
+  EnvironmentUnsupportedError,
+  FileEmptyError,
+  FrameLimitExceededError,
+  InputTooLargeError,
+  InvalidDimensionsError,
+  InspectionReadError,
+  PixelLimitExceededError,
+  ProcessingTimeoutError,
+  ServerFallbackRequiredError,
+  SourceDimensionExceededError,
+  UnsupportedFormatError,
+  isOptloadError,
+  type ImagePolicyError,
+  type ImageProcessingError,
+  type InspectionError,
+  type OptloadError,
+  type OptloadErrorCode,
+  type OptloadStage,
+} from './errors.js';
+export { inspectImageBytes } from './detect.js';
+export { inspectImage } from './inspect.js';
+export { runEffectPromise } from './promise.js';
+export {
+  checkImagePolicy,
+  defaultImagePolicy,
+  enforceImagePolicy,
+  resolveImagePolicy,
+  type ImagePolicy,
+  type ImagePolicyDecision,
+  type PolicyIssue,
+  type PolicyIssueCode,
+  type ResolvedImagePolicy,
+  type UnknownDimensionBehavior,
+} from './policy.js';
+export {
+  formatExtensions,
+  formatMediaTypes,
+  imageFormats,
+  type BlobLike,
+  type ExifOrientation,
+  type FileLike,
+  type ImageFormat,
+  type ImageInspection,
+  type InspectImageOptions,
+  type InspectionWarning,
+  type InspectionWarningCode,
+  type SupportedInputFormat,
+} from './types.js';

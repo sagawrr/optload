@@ -1,0 +1,25 @@
+{
+  "name": "@optload/server",
+  "version": "0.1.0",
+  "description": "Effect-native server verification and isolated image-normalizer orchestration for Optload.",
+  "type": "module",
+  "sideEffects": false,
+  "files": ["dist"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@optload/core": "workspace:*",
+    "effect": "3.22.1"
+  }
+}

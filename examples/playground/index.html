@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="Optload browser image normalization playground"
+    />
+    <title>Optload playground</title>
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <a class="brand" href="/" aria-label="Optload home">
+          <span class="brand-mark">O</span>
+          <span>optload</span>
+        </a>
+        <span class="badge">Effect-native</span>
+      </header>
+
+      <main>
+        <section class="intro" aria-labelledby="title">
+          <p class="eyebrow">Image intake without excuses</p>
+          <h1 id="title">Drop the photo.<br /><em>We handle the format.</em></h1>
+          <p class="lede">
+            Inspect, resize, normalize, and encode locally. Unsupported inputs
+            take an explicit server-fallback path.
+          </p>
+        </section>
+
+        <section class="workspace" aria-label="Image optimizer">
+          <div class="drop-zone">
+            <input
+              id="file-input"
+              type="file"
+              accept="image/*,.heic,.heif,.avif"
+              multiple
+              hidden
+            />
+            <span class="drop-icon" aria-hidden="true">↘</span>
+            <button id="choose-files" class="choose-button" type="button">
+              Choose photos
+            </button>
+            <span>or drop them anywhere on this page</span>
+            <div class="sample-actions">
+              <button id="try-sample" class="sample-button" type="button">
+                Try local route
+              </button>
+              <button id="try-fallback" class="sample-button" type="button">
+                Try fallback route
+              </button>
+            </div>
+            <small>JPEG · PNG · WebP · AVIF · HEIC/HEIF</small>
+          </div>
+
+          <div id="status" class="status" hidden aria-live="polite">
+            <div class="status-row">
+              <span id="status-message">Inspecting…</span>
+              <span id="status-percent">0%</span>
+            </div>
+            <div class="progress-track" aria-hidden="true">
+              <div id="progress-bar" class="progress-bar"></div>
+            </div>
+          </div>
+
+          <article id="result" class="result" hidden>
+            <div class="preview-wrap">
+              <img id="preview" alt="Optimized upload preview" />
+            </div>
+            <div class="result-copy">
+              <p id="route" class="eyebrow"></p>
+              <h2 id="file-name"></h2>
+              <dl>
+                <div><dt>Input</dt><dd id="input-info"></dd></div>
+                <div><dt>Output</dt><dd id="output-info"></dd></div>
+                <div><dt>Saved</dt><dd id="saved-info"></dd></div>
+                <div><dt>Time</dt><dd id="time-info"></dd></div>
+              </dl>
+            </div>
+          </article>
+
+          <p id="error" class="error" hidden role="alert"></p>
+        </section>
+      </main>
+    </div>
+
+    <div id="drop-overlay" class="drop-overlay" hidden aria-hidden="true">
+      <div>Drop to process</div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
