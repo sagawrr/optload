@@ -8,8 +8,8 @@ below is an actual run, not a vendor claim.
 
 | Engine | User agent | Notes |
 | --- | --- | --- |
-| chromium | `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.7922.34 Safari/537.36` | ran |
-| firefox | `—` | ⚠ unavailable |
+| chromium | `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.7922.34 Safari/537.36` | ran |
+| firefox | `Mozilla/5.0 (X11; Linux x86_64; rv:153.0) Gecko/20100101 Firefox/153.0` | ran |
 | webkit | `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15` | ran |
 
 ## Decode capability (createImageBitmap on real bytes)
@@ -17,16 +17,16 @@ below is an actual run, not a vendor claim.
 | Engine | jpeg | png | webp | heic | worker | offscreen |
 | --- | --- | --- | --- | --- | --- | --- |
 | chromium | 800x600 | 128x128 | 640x480 | no | true | true |
-| firefox | — | — | — | — | undefined | undefined |
-| webkit | 800x600 | 128x128 | 640x480 | 64x48 | true | true |
+| firefox | 800x600 | 128x128 | 640x480 | no | true | true |
+| webkit | 800x600 | 128x128 | 640x480 | no | true | true |
 
 ## Pipeline scenarios
 
 | Engine | local JPEG (EXIF stripped, worker) | local PNG alpha | trailing data dropped | HEIC routes honestly | SVG rejected | unknown bytes identified |
 | --- | --- | --- | --- | --- | --- | --- |
 | chromium | pass | pass | pass | pass | pass | pass |
-| firefox | ⚠ unavailable | ⚠ unavailable | ⚠ unavailable | ⚠ unavailable | ⚠ unavailable | ⚠ unavailable |
-| webkit | honest server fallback (no native webp encoder) | pass | detected; honest server fallback (no native webp encoder) | pass | pass | pass |
+| firefox | pass | pass | pass | pass | pass | pass |
+| webkit | pass | pass | pass | pass | pass | pass |
 
 ## Notes
 
