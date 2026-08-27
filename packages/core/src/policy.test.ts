@@ -93,6 +93,7 @@ function inspection(overrides: Partial<ImageInspection> = {}): ImageInspection {
     animated: false,
     hasAlpha: false,
     orientation: 1,
+    trailingData: null,
     warnings: [],
     ...overrides,
   };

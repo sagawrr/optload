@@ -130,6 +130,32 @@ export class DecodedDimensionError extends Data.TaggedError(
   override readonly message = `The decoded image is ${this.width}×${this.height}, exceeding the ${this.maxDimension}px-per-side or ${this.maxPixels}-pixel decode limit.`;
 }
 
+/**
+ * The decoder produced dimensions that differ from (while remaining within)
+ * the inspected header's declaration, so the header lied about the frame.
+ */
+export class DecodedDimensionMismatchError extends Data.TaggedError(
+  'DecodedDimensionMismatchError',
+)<{
+  readonly declaredWidth: number;
+  readonly declaredHeight: number;
+  readonly decodedWidth: number;
+  readonly decodedHeight: number;
+}> {
+  readonly code = 'DECODED_DIMENSION_MISMATCH' as const;
+  readonly stage = 'decode' as const;
+  override readonly message = `The decoded image is ${this.decodedWidth}×${this.decodedHeight}, but the header declared ${this.declaredWidth}×${this.declaredHeight}.`;
+}
+
+/** Bytes continue past the format's terminal marker and policy forbids them. */
+export class TrailingDataError extends Data.TaggedError('TrailingDataError')<{
+  readonly format: ImageFormat | null;
+}> {
+  readonly code = 'TRAILING_DATA' as const;
+  readonly stage = 'policy' as const;
+  override readonly message = `Bytes continue past the ${this.format ?? 'image'} container's end marker; appended data is not part of the image.`;
+}
+
 export class EncodeError extends Data.TaggedError('EncodeError')<{
   readonly mediaType: string;
   readonly reason: unknown;
@@ -178,11 +204,13 @@ export type ImagePolicyError =
   | SourceDimensionExceededError
   | PixelLimitExceededError
   | AnimationNotAllowedError
-  | FrameLimitExceededError;
+  | FrameLimitExceededError
+  | TrailingDataError;
 
 export type ImageProcessingError =
   | DecodeError
   | DecodedDimensionError
+  | DecodedDimensionMismatchError
   | EncodeError
   | ProcessingTimeoutError
   | EnvironmentUnsupportedError;

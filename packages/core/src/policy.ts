@@ -7,6 +7,7 @@ import {
   InvalidDimensionsError,
   PixelLimitExceededError,
   SourceDimensionExceededError,
+  TrailingDataError,
   UnsupportedFormatError,
   type ImagePolicyError,
 } from './errors.js';
@@ -26,6 +27,15 @@ export interface ImagePolicy {
   readonly maxFrames?: number;
   readonly allowAnimation?: boolean;
   readonly unknownDimensions?: UnknownDimensionBehavior;
+  /**
+   * Reject files whose inspected bytes continue past the format's terminal
+   * marker (PNG IEND, JPEG EOI, the declared WebP RIFF extent). Appended
+   * bytes are invisible to decoders but survive verbatim storage: they are
+   * the polyglot and truncated-overwrite-leak channel. Warnings are always
+   * reported; this escalates them to rejections where original bytes are
+   * stored. Unknown for formats without a cheap terminal marker.
+   */
+  readonly rejectTrailingData?: boolean;
 }
 
 export interface ResolvedImagePolicy {
@@ -36,6 +46,7 @@ export interface ResolvedImagePolicy {
   readonly maxFrames: number;
   readonly allowAnimation: boolean;
   readonly unknownDimensions: UnknownDimensionBehavior;
+  readonly rejectTrailingData: boolean;
 }
 
 export type PolicyIssueCode = ImagePolicyError['code'];
@@ -80,6 +91,7 @@ export const defaultImagePolicy: ResolvedImagePolicy = Object.freeze({
   maxFrames: 1,
   allowAnimation: false,
   unknownDimensions: 'fallback',
+  rejectTrailingData: false,
 });
 
 export function resolveImagePolicy(policy: ImagePolicy = {}): ResolvedImagePolicy {
@@ -93,6 +105,8 @@ export function resolveImagePolicy(policy: ImagePolicy = {}): ResolvedImagePolic
     allowAnimation: policy.allowAnimation ?? defaultImagePolicy.allowAnimation,
     unknownDimensions:
       policy.unknownDimensions ?? defaultImagePolicy.unknownDimensions,
+    rejectTrailingData:
+      policy.rejectTrailingData ?? defaultImagePolicy.rejectTrailingData,
   };
 }
 
@@ -229,6 +243,21 @@ function animationIssues(
   return issues;
 }
 
+function trailingDataIssue(
+  inspection: ImageInspection,
+  policy: ResolvedImagePolicy,
+): PolicyIssue | null {
+  if (!policy.rejectTrailingData || inspection.trailingData !== true) {
+    return null;
+  }
+  return {
+    code: 'TRAILING_DATA',
+    message:
+      'The file continues past its container end marker; appended bytes are not part of the image.',
+    details: { format: inspection.format },
+  };
+}
+
 function isPolicyIssue(issue: PolicyIssue | null): issue is PolicyIssue {
   return issue !== null;
 }
@@ -242,6 +271,7 @@ export function checkImagePolicy(
   const rejected = [
     formatPolicyIssue(inspection, policy),
     inputSizeIssue(inspection, policy),
+    trailingDataIssue(inspection, policy),
     ...dimensions.rejected,
     ...animationIssues(inspection, policy),
   ].filter(isPolicyIssue);
@@ -253,6 +283,33 @@ export function checkImagePolicy(
     return { outcome: 'fallback', policy, issues: dimensions.fallback };
   }
   return { outcome: 'accept', policy, issues: [] };
+}
+
+function dimensionIssueToError(
+  issue: PolicyIssue,
+): ImagePolicyError | null {
+  switch (issue.code) {
+    case 'DIMENSIONS_UNKNOWN':
+      return new DimensionsUnknownError();
+    case 'INVALID_DIMENSIONS':
+      return new InvalidDimensionsError({
+        width: Number(issue.details.width),
+        height: Number(issue.details.height),
+      });
+    case 'SOURCE_DIMENSION_EXCEEDED':
+      return new SourceDimensionExceededError({
+        width: Number(issue.details.width),
+        height: Number(issue.details.height),
+        maximum: Number(issue.details.maximum),
+      });
+    case 'PIXEL_LIMIT_EXCEEDED':
+      return new PixelLimitExceededError({
+        actual: Number(issue.details.actual),
+        maximum: Number(issue.details.maximum),
+      });
+    default:
+      return null;
+  }
 }
 
 function issueToError(
@@ -268,23 +325,13 @@ function issueToError(
         maximum: Number(issue.details.maximum),
       });
     case 'DIMENSIONS_UNKNOWN':
-      return new DimensionsUnknownError();
     case 'INVALID_DIMENSIONS':
-      return new InvalidDimensionsError({
-        width: inspection.width ?? 0,
-        height: inspection.height ?? 0,
-      });
     case 'SOURCE_DIMENSION_EXCEEDED':
-      return new SourceDimensionExceededError({
-        width: inspection.width ?? 0,
-        height: inspection.height ?? 0,
-        maximum: Number(issue.details.maximum),
-      });
-    case 'PIXEL_LIMIT_EXCEEDED':
-      return new PixelLimitExceededError({
-        actual: inspection.pixels ?? 0,
-        maximum: Number(issue.details.maximum),
-      });
+    case 'PIXEL_LIMIT_EXCEEDED': {
+      const dimension = dimensionIssueToError(issue);
+      if (dimension) return dimension;
+      throw new Error(`Unhandled dimension issue: ${String(issue.code)}`);
+    }
     case 'ANIMATION_NOT_ALLOWED':
       return new AnimationNotAllowedError({ frameCount: inspection.frameCount });
     case 'FRAME_LIMIT_EXCEEDED':
@@ -292,6 +339,8 @@ function issueToError(
         actual: inspection.frameCount ?? 0,
         maximum: Number(issue.details.maximum),
       });
+    case 'TRAILING_DATA':
+      return new TrailingDataError({ format: inspection.format });
   }
 }
 

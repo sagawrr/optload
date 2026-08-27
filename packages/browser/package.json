@@ -1,6 +1,6 @@
 {
   "name": "@optload/browser",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Effect-powered browser image intake with Promise-first and native Effect APIs.",
   "type": "module",
   "sideEffects": [
@@ -21,7 +21,8 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "typecheck": "tsc -b --pretty false"
+    "typecheck": "tsc -b --pretty false",
+    "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
     "@optload/core": "workspace:*",

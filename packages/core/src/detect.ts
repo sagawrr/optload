@@ -15,6 +15,12 @@ interface DetectedHeader {
   readonly animated: boolean | null;
   readonly hasAlpha: boolean | null;
   readonly orientation: ExifOrientation | null;
+  /** The prefix declared the frame size more than once with conflicting values. */
+  readonly dimensionConflict?: boolean;
+  /** Bytes continue past the format's terminal marker within the inspected prefix. */
+  readonly trailingData?: boolean;
+  /** EXIF, XMP, ICC, or textual metadata chunks were seen in the prefix. */
+  readonly hasMetadata?: boolean;
 }
 
 interface DetectContext {
@@ -128,10 +134,6 @@ function parseExifOrientation(
   return null;
 }
 
-function isJpegStreamEnd(marker: number): boolean {
-  return marker === 0xd9 || marker === 0xda;
-}
-
 function isJpegStandaloneMarker(marker: number): boolean {
   return marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7);
 }
@@ -141,19 +143,86 @@ function skipFillBytes(bytes: Uint8Array, offset: number): number {
   return offset;
 }
 
+interface JpegSofState {
+  width: number | null;
+  height: number | null;
+  count: number;
+  conflict: boolean;
+}
+
+/**
+ * A well-formed JPEG has exactly one SOF. When a prefix hides several, policy
+ * must judge the largest frame any marker declares: a decoy small SOF in
+ * front of an oversized one is the double-SOF bomb shape.
+ */
+function noteJpegSof(state: JpegSofState, width: number, height: number): void {
+  if (state.count === 0) {
+    state.width = width;
+    state.height = height;
+  } else {
+    if (width !== state.width || height !== state.height) state.conflict = true;
+    if (width > (state.width ?? 0)) state.width = width;
+    if (height > (state.height ?? 0)) state.height = height;
+  }
+  state.count += 1;
+}
+
+function jpegSegmentMetadata(
+  bytes: Uint8Array,
+  marker: number,
+  payloadStart: number,
+  segmentLength: number,
+): { orientation: ExifOrientation | null; metadata: boolean } {
+  if (marker === 0xe1 && segmentLength >= 8) {
+    if (ascii(bytes, payloadStart, 6) === 'Exif\0\0') {
+      return {
+        orientation: parseExifOrientation(
+          bytes,
+          payloadStart + 6,
+          payloadStart - 2 + segmentLength,
+        ),
+        metadata: true,
+      };
+    }
+    if (
+      segmentLength >= 31 &&
+      ascii(bytes, payloadStart, 28) === 'http://ns.adobe.com/xap/1.0'
+    ) {
+      return { orientation: null, metadata: true };
+    }
+  }
+  if (
+    marker === 0xe2 &&
+    segmentLength >= 14 &&
+    ascii(bytes, payloadStart, 11) === 'ICC_PROFILE' &&
+    byte(bytes, payloadStart + 11) === 0
+  ) {
+    return { orientation: null, metadata: true };
+  }
+  return { orientation: null, metadata: false };
+}
+
 function detectJpeg(bytes: Uint8Array): DetectedHeader | null {
   if (!matches(bytes, 0, [0xff, 0xd8, 0xff])) return null;
 
-  let width: number | null = null;
-  let height: number | null = null;
+  const sof: JpegSofState = { width: null, height: null, count: 0, conflict: false };
   let orientation: ExifOrientation | null = null;
+  let trailingData = false;
+  let hasMetadata = false;
   let offset = 2;
 
   while (offset + 4 <= bytes.length) {
     offset = skipFillBytes(bytes, offset);
     const marker = byte(bytes, offset);
     offset += 1;
-    if (isJpegStreamEnd(marker)) break;
+    if (marker === 0xd9) {
+      // Entropy data after SOS is opaque to a segment walk, but bytes after
+      // EOI are not part of any JPEG structure; they are a classic polyglot
+      // and data-leak channel (re-encoding drops them).
+      trailingData = offset < bytes.length;
+      break;
+    }
+    if (marker === 0xda) break;
     if (isJpegStandaloneMarker(marker)) continue;
     if (offset + 2 > bytes.length) break;
 
@@ -162,46 +231,53 @@ function detectJpeg(bytes: Uint8Array): DetectedHeader | null {
 
     const markerStart = offset - 2;
     if (jpegStartOfFrameMarkers.has(marker) && segmentLength >= 7) {
-      height = u16be(bytes, markerStart + 5);
-      width = u16be(bytes, markerStart + 7);
-    }
-
-    const payloadStart = offset + 2;
-    if (
-      marker === 0xe1 &&
-      segmentLength >= 8 &&
-      ascii(bytes, payloadStart, 6) === 'Exif\0\0'
-    ) {
-      orientation = parseExifOrientation(
-        bytes,
-        payloadStart + 6,
-        offset + segmentLength,
+      noteJpegSof(
+        sof,
+        u16be(bytes, markerStart + 7),
+        u16be(bytes, markerStart + 5),
       );
     }
 
-    if (width !== null && orientation !== null) break;
+    const segment = jpegSegmentMetadata(
+      bytes,
+      marker,
+      offset + 2,
+      segmentLength,
+    );
+    orientation = orientation ?? segment.orientation;
+    hasMetadata = hasMetadata || segment.metadata;
+
     offset += segmentLength;
   }
 
   return {
     format: 'jpeg',
-    width,
-    height,
+    width: sof.width,
+    height: sof.height,
     frameCount: 1,
     animated: false,
     hasAlpha: false,
     orientation,
+    dimensionConflict: sof.conflict,
+    trailingData,
+    hasMetadata,
   };
 }
 
-function detectPng(bytes: Uint8Array): DetectedHeader | null {
-  if (!matches(bytes, 0, [137, 80, 78, 71, 13, 10, 26, 10])) return null;
+interface PngChunkWalk {
+  readonly frameCount: number | null;
+  readonly animated: boolean | null;
+  readonly iendEnd: number | null;
+  readonly hasMetadata: boolean;
+}
 
-  const width = bytes.length >= 24 ? u32be(bytes, 16) : null;
-  const height = bytes.length >= 24 ? u32be(bytes, 20) : null;
-  const colorType = bytes.length >= 26 ? byte(bytes, 25) : null;
+const pngMetadataChunks = new Set(['eXIf', 'tEXt', 'zTXt', 'iTXt']);
+
+function walkPngChunks(bytes: Uint8Array): PngChunkWalk {
   let frameCount: number | null = null;
   let animated: boolean | null = null;
+  let iendEnd: number | null = null;
+  let hasMetadata = false;
   let sawIdat = false;
   let offset = 8;
 
@@ -210,16 +286,18 @@ function detectPng(bytes: Uint8Array): DetectedHeader | null {
     const type = ascii(bytes, offset + 4, 4);
     const next = offset + 12 + length;
     if (!Number.isSafeInteger(next) || next > bytes.length) break;
-    if (type === 'acTL' && length >= 8) {
+    if (type === 'acTL' && length >= 8 && frameCount === null) {
       frameCount = u32be(bytes, offset + 8);
       animated = frameCount > 1;
-      break;
-    }
-    if (type === 'IDAT') {
-      // The APNG spec requires acTL before the first IDAT, so reaching IDAT
-      // without one rules animation out.
+    } else if (type === 'IDAT') {
+      // Reaching IDAT without a preceding acTL rules animation out; keep
+      // walking so IEND and metadata chunks after the image data are seen.
       sawIdat = true;
+    } else if (type === 'IEND') {
+      iendEnd = next;
       break;
+    } else if (pngMetadataChunks.has(type)) {
+      hasMetadata = true;
     }
     offset = next;
   }
@@ -229,14 +307,30 @@ function detectPng(bytes: Uint8Array): DetectedHeader | null {
     animated = false;
   }
 
+  return { frameCount, animated, iendEnd, hasMetadata };
+}
+
+function detectPng(bytes: Uint8Array): DetectedHeader | null {
+  if (!matches(bytes, 0, [137, 80, 78, 71, 13, 10, 26, 10])) return null;
+
+  const width = bytes.length >= 24 ? u32be(bytes, 16) : null;
+  const height = bytes.length >= 24 ? u32be(bytes, 20) : null;
+  const colorType = bytes.length >= 26 ? byte(bytes, 25) : null;
+  const walk = walkPngChunks(bytes);
+
   return {
     format: 'png',
     width,
     height,
-    frameCount,
-    animated,
+    frameCount: walk.frameCount,
+    animated: walk.animated,
     hasAlpha: colorType === 4 || colorType === 6,
     orientation: null,
+    // Anything after IEND is invisible to PNG decoders but survives verbatim
+    // storage: it is the appended-payload channel of polyglot and
+    // truncated-overwrite leaks.
+    trailingData: walk.iendEnd !== null && walk.iendEnd < bytes.length,
+    hasMetadata: walk.hasMetadata,
   };
 }
 
@@ -244,8 +338,16 @@ function detectGif(bytes: Uint8Array): DetectedHeader | null {
   const signature = ascii(bytes, 0, 6);
   if (signature !== 'GIF87a' && signature !== 'GIF89a') return null;
 
+  // Frame bookkeeping walks bytes looking for image separators, so the global
+  // color table must be skipped first: its palette entries can contain the
+  // separator byte and would otherwise invent frames that do not exist.
+  const packedField = bytes.length >= 10 ? byte(bytes, 10) : 0;
+  const colorTableBytes =
+    packedField & 0x80 ? 3 * (2 ** ((packedField & 0x07) + 1)) : 0;
+  const scanStart = 13 + colorTableBytes;
+
   let frames = 0;
-  for (let index = 13; index < bytes.length; index += 1) {
+  for (let index = scanStart; index < bytes.length; index += 1) {
     if (byte(bytes, index) === 0x2c) frames += 1;
   }
 
@@ -266,6 +368,7 @@ interface WebpHeader {
   hasAlpha: boolean | null;
   animated: boolean;
   frames: number;
+  hasMetadata: boolean;
 }
 
 function applyWebpChunk(
@@ -275,6 +378,7 @@ function applyWebpChunk(
   length: number,
   header: WebpHeader,
 ): void {
+  if (type === 'EXIF' || type === 'XMP ') header.hasMetadata = true;
   if (type === 'VP8X' && length >= 10) {
     const flags = byte(bytes, payload);
     header.hasAlpha = (flags & 0x10) !== 0;
@@ -304,7 +408,10 @@ function applyWebpChunk(
   }
 }
 
-function detectWebp(bytes: Uint8Array): DetectedHeader | null {
+function detectWebp(
+  bytes: Uint8Array,
+  fileSize: number,
+): DetectedHeader | null {
   if (ascii(bytes, 0, 4) !== 'RIFF' || ascii(bytes, 8, 4) !== 'WEBP') return null;
 
   const header: WebpHeader = {
@@ -313,6 +420,7 @@ function detectWebp(bytes: Uint8Array): DetectedHeader | null {
     hasAlpha: null,
     animated: false,
     frames: 0,
+    hasMetadata: false,
   };
   let offset = 12;
 
@@ -327,6 +435,16 @@ function detectWebp(bytes: Uint8Array): DetectedHeader | null {
     offset = next;
   }
 
+  // A non-zero RIFF size pins the container's end; anything the file carries
+  // beyond it is appended data, not WebP structure.
+  const declaredSize = u32le(bytes, 4);
+  const declaredEnd = declaredSize + 8;
+  const trailingData =
+    declaredSize > 0 &&
+    Number.isSafeInteger(declaredEnd) &&
+    bytes.length >= declaredEnd &&
+    fileSize > declaredEnd;
+
   return {
     format: 'webp',
     width: header.width,
@@ -335,6 +453,8 @@ function detectWebp(bytes: Uint8Array): DetectedHeader | null {
     animated: header.animated,
     hasAlpha: header.hasAlpha,
     orientation: null,
+    trailingData,
+    hasMetadata: header.hasMetadata,
   };
 }
 
@@ -378,6 +498,7 @@ function findIspeDimensions(
   bytes: Uint8Array,
   start: number,
   end: number,
+  flags: { exif: boolean },
   depth = 0,
 ): { width: number; height: number } | null {
   if (depth > 8) return null;
@@ -395,6 +516,7 @@ function findIspeDimensions(
     }
 
     const type = ascii(bytes, offset + 4, 4);
+    if (type === 'Exif') flags.exif = true;
     if (type === 'ispe' && header.size >= header.headerSize + 12) {
       return {
         width: u32be(bytes, offset + header.headerSize + 4),
@@ -404,7 +526,13 @@ function findIspeDimensions(
 
     if (bmffContainerTypes.has(type)) {
       const childStart = offset + header.headerSize + (type === 'meta' ? 4 : 0);
-      const found = findIspeDimensions(bytes, childStart, offset + header.size, depth + 1);
+      const found = findIspeDimensions(
+        bytes,
+        childStart,
+        offset + header.size,
+        flags,
+        depth + 1,
+      );
       if (found) return found;
     }
 
@@ -447,7 +575,10 @@ function detectBmff(bytes: Uint8Array): DetectedHeader | null {
 
   const identified = brandFormat(collectBrands(bytes, boxSize));
   if (!identified) return null;
-  const dimensions = findIspeDimensions(bytes, boxSize, bytes.length);
+  // Best-effort EXIF sighting: the walk only crosses container boxes, so the
+  // absence of the warning does not prove the file is metadata-free.
+  const flags = { exif: false };
+  const dimensions = findIspeDimensions(bytes, boxSize, bytes.length, flags);
 
   return {
     format: identified.format,
@@ -457,6 +588,7 @@ function detectBmff(bytes: Uint8Array): DetectedHeader | null {
     animated: identified.animated,
     hasAlpha: null,
     orientation: null,
+    hasMetadata: flags.exif,
   };
 }
 
@@ -527,11 +659,11 @@ function detectSvg(bytes: Uint8Array): DetectedHeader | null {
   };
 }
 
-function detectHeader(bytes: Uint8Array): DetectedHeader {
+function detectHeader(bytes: Uint8Array, fileSize: number): DetectedHeader {
   return (
     detectJpeg(bytes) ??
     detectPng(bytes) ??
-    detectWebp(bytes) ??
+    detectWebp(bytes, fileSize) ??
     detectGif(bytes) ??
     detectBmff(bytes) ??
     detectBmp(bytes) ??
@@ -555,11 +687,10 @@ function extensionFromName(fileName: string | undefined): string | null {
   return fileName.slice(lastDot + 1).toLowerCase();
 }
 
-function inspectionWarnings(
+function identityWarnings(
   detected: DetectedHeader,
   extension: string | null,
   declaredMediaType: string | null,
-  headerWasTruncated: boolean | undefined,
 ): InspectionWarning[] {
   const warnings: InspectionWarning[] = [];
   const mediaType = detected.format ? formatMediaTypes[detected.format] : null;
@@ -582,6 +713,15 @@ function inspectionWarnings(
     });
   }
 
+  return warnings;
+}
+
+function structureWarnings(
+  detected: DetectedHeader,
+  headerWasTruncated: boolean | undefined,
+): InspectionWarning[] {
+  const warnings: InspectionWarning[] = [];
+
   if (detected.format && (detected.width === null || detected.height === null)) {
     warnings.push({
       code: 'dimensions_unknown',
@@ -596,6 +736,32 @@ function inspectionWarnings(
     });
   }
 
+  if (detected.dimensionConflict) {
+    warnings.push({
+      code: 'inconsistent_dimensions',
+      message:
+        'The header declares conflicting frame sizes; the largest declared size was used for policy.',
+    });
+  }
+
+  if (detected.trailingData) {
+    warnings.push({
+      code: 'trailing_data',
+      message:
+        `Bytes continue past the end of the ${detected.format ?? 'image'} structure; ` +
+        'they are not part of the image and re-encoding drops them.',
+    });
+  }
+
+  if (detected.hasMetadata) {
+    warnings.push({
+      code: 'metadata_present',
+      message:
+        'The file carries EXIF, XMP, ICC, or text metadata, which can include location data; ' +
+        'local re-encoding strips it, a server fallback that stores the original does not.',
+    });
+  }
+
   if (headerWasTruncated) {
     warnings.push({
       code: 'header_truncated',
@@ -606,11 +772,23 @@ function inspectionWarnings(
   return warnings;
 }
 
+function inspectionWarnings(
+  detected: DetectedHeader,
+  extension: string | null,
+  declaredMediaType: string | null,
+  headerWasTruncated: boolean | undefined,
+): InspectionWarning[] {
+  return [
+    ...identityWarnings(detected, extension, declaredMediaType),
+    ...structureWarnings(detected, headerWasTruncated),
+  ];
+}
+
 export function inspectImageBytes(
   bytes: Uint8Array,
   context: DetectContext,
 ): ImageInspection {
-  const detected = detectHeader(bytes);
+  const detected = detectHeader(bytes, context.fileSize);
   const extension = extensionFromName(context.fileName);
   const declaredMediaType = context.declaredMediaType?.toLowerCase() || null;
   const warnings = inspectionWarnings(
@@ -640,6 +818,7 @@ export function inspectImageBytes(
     animated: detected.animated,
     hasAlpha: detected.hasAlpha,
     orientation: detected.orientation,
+    trailingData: detected.trailingData ?? null,
     warnings,
   };
 }

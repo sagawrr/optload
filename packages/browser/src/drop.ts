@@ -46,7 +46,9 @@ export function attachDropTarget<FallbackValue>(
     const files = [...(dragEvent.dataTransfer?.files ?? [])];
     if (files.length === 0) return;
 
-    const selected = options.multiple === false ? files.slice(0, 1) : files;
+    const limit =
+      options.multiple === false ? 1 : maxDropFiles(options.maxFiles);
+    const selected = files.slice(0, limit);
     void processSequentially(intake, selected, options);
   };
 
@@ -72,6 +74,13 @@ function reportActive<FallbackValue>(
   } catch {
     // Overlay observers must not interfere with navigation prevention.
   }
+}
+
+/** An adversarial drop can carry thousands of files; each one runs a decoder. */
+function maxDropFiles(value: number | undefined): number {
+  return value !== undefined && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : Number.POSITIVE_INFINITY;
 }
 
 async function processSequentially<FallbackValue>(

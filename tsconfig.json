@@ -4,6 +4,7 @@
     { "path": "./packages/core" },
     { "path": "./packages/browser" },
     { "path": "./packages/server" },
+    { "path": "./packages/sharp-normalizer" },
     { "path": "./examples/playground" }
   ]
 }

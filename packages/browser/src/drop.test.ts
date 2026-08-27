@@ -57,6 +57,35 @@ describe('whole-page file drops', () => {
     expect(active).toEqual([true, false]);
     detach();
   });
+
+  it('caps how many files one adversarial drop can enqueue', async () => {
+    const target = new EventTarget() as unknown as HTMLElement;
+    const processed: string[] = [];
+    let drained: (() => void) | undefined;
+    const done = new Promise<void>((resolve) => {
+      drained = resolve;
+    });
+    const intake = {
+      process: async (file: File) => {
+        processed.push(file.name);
+        if (processed.length === 2) drained?.();
+        return { kind: 'fallback' } as ImageResult<never>;
+      },
+    } as ImageIntake;
+
+    const detach = attachDropTarget(intake, target, {
+      maxFiles: 2,
+      onResult: () => undefined,
+    });
+    const flood = [1, 2, 3, 4, 5].map(
+      (index) => new File(['image'], `flood-${index}.jpg`),
+    );
+    target.dispatchEvent(dragEvent('drop', flood));
+
+    await done;
+    expect(processed).toEqual(['flood-1.jpg', 'flood-2.jpg']);
+    detach();
+  });
 });
 
 function dragEvent(

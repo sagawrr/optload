@@ -3,7 +3,20 @@
   "compilerOptions": {
     "composite": false,
     "noEmit": true,
-    "lib": ["ES2022", "DOM"]
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
+    "paths": {
+      "@optload/core": ["../packages/core/src/index.ts"],
+      "@optload/browser": ["../packages/browser/src/index.ts"],
+      "@optload/server": ["../packages/server/src/index.ts"]
+    }
   },
-  "include": ["**/*.test.ts"]
+  "include": [
+    "**/*.test.ts",
+    "browser-matrix/harness.ts",
+    "browser-matrix/run.mts",
+    "../packages/core/src/**/*.test.ts",
+    "../packages/browser/src/**/*.test.ts",
+    "../packages/server/src/**/*.test.ts",
+    "../packages/sharp-normalizer/src/**/*.test.ts"
+  ]
 }

@@ -1,4 +1,5 @@
 import {
+  AnimationNotAllowedError,
   ProcessingTimeoutError,
   enforceImagePolicy,
   inspectImage,
@@ -38,6 +39,10 @@ const defaultBrowserInputPolicy: ImagePolicy = {
   maxFrames: 1,
   allowAnimation: false,
   unknownDimensions: 'reject',
+  // The server tier persists bytes, and appended bytes past a container's
+  // terminal marker survive storage verbatim: polyglot payloads and
+  // truncated-overwrite leaks live there.
+  rejectTrailingData: true,
 };
 
 /**
@@ -53,6 +58,7 @@ const defaultFallbackInputPolicy: ImagePolicy = {
   maxFrames: 1,
   allowAnimation: false,
   unknownDimensions: 'reject',
+  rejectTrailingData: true,
 };
 
 const allowedIsolation = new Set<NormalizerIsolation>([
@@ -97,6 +103,17 @@ export function createServerImageIntakeEffect<
 
       const outputInspection = yield* inspectImage(normalized);
       yield* enforceImagePolicy(outputInspection, outputPolicy(output));
+      // The server is the last tier: like unknown dimensions, animation that
+      // cannot be ruled out from the re-inspected bytes is rejected rather
+      // than assumed absent. A normalizer that emits animation state the
+      // header cannot confirm is itself suspect.
+      if (outputInspection.animated !== false) {
+        return yield* Effect.fail(
+          new AnimationNotAllowedError({
+            frameCount: outputInspection.frameCount,
+          }),
+        );
+      }
       if (
         outputInspection.width !== null &&
         outputInspection.height !== null &&
@@ -158,6 +175,7 @@ function outputPolicy(output: ResolvedServerOutputOptions): ImagePolicy {
     maxFrames: 1,
     allowAnimation: false,
     unknownDimensions: 'reject',
+    rejectTrailingData: true,
   };
 }
 

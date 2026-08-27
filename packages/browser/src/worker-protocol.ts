@@ -1,6 +1,7 @@
 import {
   DecodeError,
   DecodedDimensionError,
+  DecodedDimensionMismatchError,
   EncodeError,
   EnvironmentUnsupportedError,
   ProcessingTimeoutError,
@@ -45,6 +46,16 @@ export function serializeProcessingError(
           maxPixels: error.maxPixels,
         },
       };
+    case 'DecodedDimensionMismatchError':
+      return {
+        _tag: error._tag,
+        details: {
+          declaredWidth: error.declaredWidth,
+          declaredHeight: error.declaredHeight,
+          decodedWidth: error.decodedWidth,
+          decodedHeight: error.decodedHeight,
+        },
+      };
     case 'EncodeError':
       return {
         _tag: error._tag,
@@ -81,6 +92,13 @@ export function deserializeProcessingError(
         height: numberDetail(error.details.height, 0),
         maxDimension: numberDetail(error.details.maxDimension, 0),
         maxPixels: numberDetail(error.details.maxPixels, 0),
+      });
+    case 'DecodedDimensionMismatchError':
+      return new DecodedDimensionMismatchError({
+        declaredWidth: numberDetail(error.details.declaredWidth, 0),
+        declaredHeight: numberDetail(error.details.declaredHeight, 0),
+        decodedWidth: numberDetail(error.details.decodedWidth, 0),
+        decodedHeight: numberDetail(error.details.decodedHeight, 0),
       });
     case 'EncodeError':
       return new EncodeError({

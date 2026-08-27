@@ -39,7 +39,10 @@ export type InspectionWarningCode =
   | 'extension_mismatch'
   | 'dimensions_unknown'
   | 'animation_unknown'
-  | 'header_truncated';
+  | 'header_truncated'
+  | 'inconsistent_dimensions'
+  | 'trailing_data'
+  | 'metadata_present';
 
 export interface InspectionWarning {
   readonly code: InspectionWarningCode;
@@ -61,6 +64,8 @@ export interface ImageInspection {
   readonly animated: boolean | null;
   readonly hasAlpha: boolean | null;
   readonly orientation: ExifOrientation | null;
+  /** Bytes continue past the format's terminal marker; null when unknown. */
+  readonly trailingData: boolean | null;
   readonly warnings: readonly InspectionWarning[];
 }
 

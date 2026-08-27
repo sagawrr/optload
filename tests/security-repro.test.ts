@@ -155,6 +155,7 @@ describe('V1: double-SOF dimension divergence', () => {
           new Error('Invalid JPEG file structure: two SOF markers'),
         ),
     );
+    vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas);
 
     const reasons: string[] = [];
     const intake = createImageIntake({
@@ -278,14 +279,302 @@ describe('V5: PNG animation honesty', () => {
   });
 });
 
-function bmffHeicFile(width: number, height: number): File {
+// V6 — a second, oversized SOF inside the inspected prefix drove policy
+
+describe('V6: multi-SOF within the inspected prefix', () => {
+  it('judges the largest declared frame and warns about the conflict', async () => {
+    const parts: number[] = [
+      0xff, 0xd8, ...jpegSof(100, 100), ...jpegCom(), ...jpegSof(30_000, 30_000),
+      0xff, 0xd9,
+    ];
+    const file = new File(
+      [new Uint8Array(parts)],
+      'multi-sof.jpg',
+      { type: 'image/jpeg' },
+    );
+
+    const inspection = await runEffectPromise(inspectImage(file));
+    expect(inspection.width).toBe(30_000);
+    expect(inspection.height).toBe(30_000);
+    expect(inspection.warnings.map(({ code }) => code)).toContain(
+      'inconsistent_dimensions',
+    );
+    expect(checkImagePolicy(inspection).outcome).toBe('reject');
+  });
+
+  it('does not flag a well-formed single-SOF JPEG (control)', async () => {
+    const parts: number[] = [0xff, 0xd8, ...jpegSof(100, 100), 0xff, 0xd9];
+    const file = new File([new Uint8Array(parts)], 'ok.jpg', {
+      type: 'image/jpeg',
+    });
+    const inspection = await runEffectPromise(inspectImage(file));
+    expect(inspection.warnings.map(({ code }) => code)).not.toContain(
+      'inconsistent_dimensions',
+    );
+  });
+});
+
+// V7/V8 — appended data past the container end (polyglot / leak channel)
+
+describe('V7: trailing data after the PNG container end', () => {
+  it('warns when bytes follow the IEND chunk', async () => {
+    const ihdr = pngHeaderBytes(64, 64);
+    const png = new Uint8Array([
+      ...ihdr,
+      ...u32be(2), ...ascii('IDAT'), 0x78, 0x9c, ...u32be(0),
+      ...u32be(0), ...ascii('IEND'), ...u32be(0),
+      ...ascii('hidden-payload\r\n'),
+    ]);
+    const file = new File([png], 'acro.png', { type: 'image/png' });
+
+    const inspection = await runEffectPromise(inspectImage(file));
+    expect(inspection.format).toBe('png');
+    expect(inspection.animated).toBe(false);
+    expect(inspection.warnings.map(({ code }) => code)).toContain(
+      'trailing_data',
+    );
+  });
+
+  it('warns when a WebP file continues past its declared RIFF extent', async () => {
+    const base = new Uint8Array(
+      await webpFile('trail.webp', 1920, 1080).arrayBuffer(),
+    );
+    const withTrailer = new Uint8Array([...base, ...ascii('APPENDED-JUNK')]);
+    const file = new File([withTrailer], 'trail.webp', { type: 'image/webp' });
+
+    const inspection = await runEffectPromise(inspectImage(file));
+    expect(inspection.format).toBe('webp');
+    expect(inspection.warnings.map(({ code }) => code)).toContain(
+      'trailing_data',
+    );
+
+    const clean = await runEffectPromise(
+      inspectImage(webpFile('clean.webp', 64, 64)),
+    );
+    expect(clean.warnings.map(({ code }) => code)).not.toContain(
+      'trailing_data',
+    );
+  });
+});
+
+// V9 — metadata presence is surfaced for privacy decisions
+
+describe('V9: metadata presence warnings', () => {
+  it('reports an EXIF segment in a JPEG', async () => {
+    const exif: number[] = [
+      0xff, 0xe1, ...u16be(2 + 6 + 8), ...ascii('Exif\0\0'),
+      0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00,
+    ];
+    const parts = [0xff, 0xd8, ...exif, ...jpegSof(100, 100), 0xff, 0xd9];
+    const file = new File([new Uint8Array(parts)], 'located.jpg', {
+      type: 'image/jpeg',
+    });
+
+    const inspection = await runEffectPromise(inspectImage(file));
+    expect(inspection.warnings.map(({ code }) => code)).toContain(
+      'metadata_present',
+    );
+  });
+
+  it('reports an Exif box in a HEIC container', async () => {
+    const file = bmffHeicFile(1600, 1200, true);
+    const inspection = await runEffectPromise(inspectImage(file));
+    expect(inspection.warnings.map(({ code }) => code)).toContain(
+      'metadata_present',
+    );
+  });
+
+  it('reports an eXIf chunk in a PNG', async () => {
+    const ihdr = pngHeaderBytes(64, 64);
+    const png = new Uint8Array([
+      ...ihdr,
+      ...u32be(4), ...ascii('eXIf'), 0, 0, 0, 0, ...u32be(0),
+      ...u32be(2), ...ascii('IDAT'), 0x78, 0x9c, ...u32be(0),
+      ...u32be(0), ...ascii('IEND'), ...u32be(0),
+    ]);
+    const file = new File([png], 'meta.png', { type: 'image/png' });
+
+    const inspection = await runEffectPromise(inspectImage(file));
+    expect(inspection.warnings.map(({ code }) => code)).toContain(
+      'metadata_present',
+    );
+  });
+});
+
+// V10 — normalizer output must prove it is still, not merely claim it
+
+describe('V10: normalizer output must prove stillness', () => {
+  it('rejects PNG output whose animation state cannot be established', async () => {
+    const intake = createServerImageIntake({
+      output: { format: 'png' },
+      normalizer: {
+        isolation: 'external-service',
+        // IHDR-only output: the re-inspection never reaches IDAT, so
+        // animation cannot be ruled out from the bytes.
+        normalize: () => pngFile('out.png', 64, 64),
+      },
+    });
+
+    const outcome = await intake
+      .process(pngFile('in.png', 100, 100))
+      .then(
+        () => 'accepted',
+        (error: { code?: string }) => `rejected:${error.code ?? 'unknown'}`,
+      );
+    expect(outcome).toBe('rejected:ANIMATION_NOT_ALLOWED');
+  });
+
+  it('accepts a well-formed still PNG output (control)', async () => {
+    const stillPng = () => {
+      const ihdr = pngHeaderBytes(64, 64);
+      return new File(
+        [
+          new Uint8Array([
+            ...ihdr,
+            ...u32be(2), ...ascii('IDAT'), 0x78, 0x9c, ...u32be(0),
+            ...u32be(0), ...ascii('IEND'), ...u32be(0),
+          ]),
+        ],
+        'out.png',
+        { type: 'image/png' },
+      );
+    };
+    const intake = createServerImageIntake({
+      output: { format: 'png' },
+      normalizer: {
+        isolation: 'external-service',
+        normalize: () => stillPng(),
+      },
+    });
+
+    const result = await intake.process(pngFile('in.png', 100, 100));
+    expect(result.outputInspection.animated).toBe(false);
+  });
+});
+
+// V11 — appended bytes past the container end are policy-enforceable
+
+describe('V11: trailing data policy', () => {
+  const trailingPng = (): Uint8Array<ArrayBuffer> =>
+    new Uint8Array([
+      ...pngHeaderBytes(64, 64),
+      ...u32be(2), ...ascii('IDAT'), 0x78, 0x9c, ...u32be(0),
+      ...u32be(0), ...ascii('IEND'), ...u32be(0),
+      0xde, 0xad, 0xbe, 0xef,
+    ]);
+
+  it('is a warning under default policy and a rejection when configured', () => {
+    const bytes = trailingPng();
+    const inspection = inspectImageBytes(bytes, { fileSize: bytes.length });
+    expect(inspection.trailingData).toBe(true);
+    expect(checkImagePolicy(inspection).outcome).toBe('accept');
+    expect(
+      inspection.warnings.map(({ code }) => code),
+    ).toContain('trailing_data');
+
+    const strict = checkImagePolicy(inspection, { rejectTrailingData: true });
+    expect(strict.outcome).toBe('reject');
+    expect(strict.issues[0]?.code).toBe('TRAILING_DATA');
+  });
+
+  it('the server rejects trailing data on input before calling the normalizer', async () => {
+    let normalizerCalled = false;
+    const intake = createServerImageIntake({
+      normalizer: {
+        isolation: 'external-service',
+        normalize: () => {
+          normalizerCalled = true;
+          return webpFile('out.webp', 64, 64);
+        },
+      },
+    });
+
+    const file = new File([trailingPng()], 'trailing.png', {
+      type: 'image/png',
+    });
+    const outcome = await intake
+      .process(file, { source: 'original-fallback' })
+      .then(
+        () => 'accepted',
+        (error: { code?: string }) => `rejected:${error.code ?? 'unknown'}`,
+      );
+    expect(outcome).toBe('rejected:TRAILING_DATA');
+    expect(normalizerCalled).toBe(false);
+  });
+
+  it('the server rejects normalizer output carrying appended bytes', async () => {
+    const intake = createServerImageIntake({
+      normalizer: {
+        isolation: 'external-service',
+        normalize: async () => {
+          const base = new Uint8Array(
+            await webpFile('out.webp', 64, 64).arrayBuffer(),
+          );
+          return new File(
+            [new Uint8Array([...base, ...ascii('JUNK')])],
+            'out.webp',
+            { type: 'image/webp' },
+          );
+        },
+      },
+    });
+
+    const outcome = await intake.process(pngFile('in.png', 100, 100)).then(
+      () => 'accepted',
+      (error: { code?: string }) => `rejected:${error.code ?? 'unknown'}`,
+    );
+    expect(outcome).toBe('rejected:TRAILING_DATA');
+  });
+});
+
+// V12 — a decoder that outputs a frame the header never declared
+
+describe('V12: decoded-versus-declared dimension mismatch', () => {
+  it('fails closed to the server route instead of trusting the header', async () => {
+    vi.stubGlobal(
+      'createImageBitmap',
+      () =>
+        Promise.resolve({
+          width: 400,
+          height: 400,
+          close: () => undefined,
+        }),
+    );
+    vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas);
+
+    const reasons: string[] = [];
+    const intake = createImageIntake({
+      execution: 'main-thread',
+      fallback: ({ reason }) => {
+        reasons.push(reason.code);
+        return { routed: true };
+      },
+    });
+
+    const file = new File(
+      [new Uint8Array([0xff, 0xd8, ...jpegSof(100, 100), 0xff, 0xd9])],
+      'lie.jpg',
+      { type: 'image/jpeg' },
+    );
+    const result = await intake.process(file);
+    expect(result).toMatchObject({ kind: 'fallback' });
+    expect(reasons).toContain('DECODED_DIMENSION_MISMATCH');
+  });
+});
+
+function bmffHeicFile(width: number, height: number, withExif = false): File {
   const box = (type: string, payload: number[]) =>
     new Uint8Array([...u32be(payload.length + 8), ...ascii(type), ...payload]);
   const ftyp = box('ftyp', [...ascii('heic'), 0, 0, 0, 0, ...ascii('heic'), ...ascii('mif1')]);
   const ispe = box('ispe', [0, 0, 0, 0, ...u32be(width), ...u32be(height)]);
   const ipco = box('ipco', [...ispe]);
   const iprp = box('iprp', [...ipco]);
-  const meta = box('meta', [0, 0, 0, 0, ...iprp]);
+  // The property walk stops at the first ispe, so the Exif box must precede
+  // iprp for the bounded inspection to see it.
+  const exif = withExif
+    ? box('Exif', [0, 0, 0, 0, 0x49, 0x49, 0x2a, 0x00])
+    : new Uint8Array(0);
+  const meta = box('meta', [0, 0, 0, 0, ...exif, ...iprp]);
   return new File([new Uint8Array([...ftyp, ...meta]).buffer], 'cam.heic', {
     type: 'image/heic',
   });

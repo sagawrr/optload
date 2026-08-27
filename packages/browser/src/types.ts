@@ -136,6 +136,13 @@ export type ImageIntakeError =
 
 export interface DropTargetOptions<FallbackValue> {
   readonly multiple?: boolean;
+  /**
+   * Cap on files processed from a single drop. Every accepted file runs a
+   * fresh decoding worker, so an unbounded drop is a client-side
+   * resource-exhaustion vector. Unlimited by default to preserve existing
+   * behavior; set it to what the surrounding UI can actually present.
+   */
+  readonly maxFiles?: number;
   readonly onActiveChange?: (active: boolean) => void;
   readonly onResult: (result: ImageResult<FallbackValue>, file: File) => void;
   readonly onError?: (error: unknown, file: File) => void;

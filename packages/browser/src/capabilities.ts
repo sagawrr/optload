@@ -38,3 +38,43 @@ export function canUseFreshWorker(): boolean {
     typeof globalThis.createImageBitmap === 'function'
   );
 }
+
+/**
+ * Proves canvas encoding for a format with a real 1x1 encode. The format
+ * table is not enough: WebKit decodes WebP but its canvas encoder produces
+ * PNG for image/webp, and the processor's output-type check treats that as
+ * an encode failure. Callers cache the result per intake instance.
+ */
+export function probeEncodeCapability(format: string): Promise<boolean> {
+  return probeEncode(format).catch(() => false);
+}
+
+async function probeEncode(format: string): Promise<boolean> {
+  if (typeof globalThis.createImageBitmap !== 'function') return false;
+  const mediaType = `image/${format}`;
+
+  if (typeof globalThis.OffscreenCanvas === 'function') {
+    const canvas = new OffscreenCanvas(1, 1);
+    const context = canvas.getContext('2d');
+    if (!context) return false;
+    context.fillStyle = '#804020';
+    context.fillRect(0, 0, 1, 1);
+    const blob = await canvas.convertToBlob({ type: mediaType, quality: 0.8 });
+    return blob.type === mediaType && blob.size > 0;
+  }
+
+  if (typeof document !== 'undefined') {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    return new Promise((resolve) => {
+      canvas.toBlob(
+        (blob) => resolve(blob !== null && blob.type === mediaType),
+        mediaType,
+        0.8,
+      );
+    });
+  }
+
+  return false;
+}

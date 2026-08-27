@@ -1,11 +1,12 @@
 {
-  "name": "@optload/core",
+  "name": "@optload/sharp-normalizer",
   "version": "1.0.0",
-  "description": "Effect-native image inspection and policy primitives for Optload.",
+  "description": "Process-isolated sharp decoder adapter implementing the Optload server normalizer contract.",
   "type": "module",
   "sideEffects": false,
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "exports": {
     ".": {
@@ -22,15 +23,20 @@
     "node": ">=20"
   },
   "dependencies": {
-    "effect": "3.22.1"
+    "@optload/core": "workspace:*",
+    "@optload/server": "workspace:*",
+    "sharp": "0.35.4"
   },
   "license": "MIT",
   "keywords": [
     "image",
-    "upload",
-    "security",
-    "magic-bytes",
-    "policy",
-    "effect"
-  ]
+    "sharp",
+    "libvips",
+    "normalizer",
+    "optload",
+    "security"
+  ],
+  "devDependencies": {
+    "@types/node": "^24.0.0"
+  }
 }

@@ -44,6 +44,7 @@ function inspection(overrides: Partial<ImageInspection> = {}): ImageInspection {
     declaredMediaType: 'image/jpeg', fileName: 'photo.jpg', fileSize: 1,
     bytesInspected: 1, width: 4000, height: 3000, pixels: 12_000_000,
     frameCount: 1, animated: false, hasAlpha: false, orientation: 1,
+    trailingData: null,
     warnings: [], ...overrides,
   };
 }

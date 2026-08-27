@@ -95,7 +95,9 @@ describe('image intake routing', () => {
 
   it('routes a decoded-dimension breach away from local processing', async () => {
     // A header can understate the real frame size; the decoder is the
-    // authority on what was actually decoded.
+    // authority on what was actually decoded. The OffscreenCanvas stub
+    // satisfies the encode-capability probe; the breach aborts before any
+    // surface is created.
     let closed = false;
     vi.stubGlobal(
       'createImageBitmap',
@@ -108,6 +110,21 @@ describe('image intake routing', () => {
           },
         }),
       ),
+    );
+    vi.stubGlobal('OffscreenCanvas',
+      class {
+        getContext() {
+          return {
+            fillRect() {},
+            drawImage() {},
+            set imageSmoothingEnabled(_value: boolean) {},
+            set imageSmoothingQuality(_value: string) {},
+          };
+        }
+        async convertToBlob(init: { type: string }) {
+          return { type: init.type, size: 16 };
+        }
+      },
     );
 
     const reasons: string[] = [];

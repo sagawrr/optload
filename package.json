@@ -12,15 +12,19 @@
     "dev": "pnpm --filter @optload/playground dev",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -b --pretty false && tsc -p tests --noEmit"
+    "typecheck": "tsc -b --pretty false && tsc -p tests --noEmit",
+    "test:browsers": "node tests/browser-matrix/run.mts"
   },
   "devDependencies": {
     "@effect/vitest": "0.30.0",
     "@optload/browser": "workspace:*",
     "@optload/core": "workspace:*",
     "@optload/server": "workspace:*",
+    "@types/node": "^24.0.0",
     "effect": "3.22.1",
     "oxlint": "^1.80.0",
+    "playwright": "1.62.1",
+    "sharp": "0.35.4",
     "typescript": "^5.9.2",
     "vite": "^7.3.5",
     "vitest": "^3.2.6"

@@ -8,12 +8,13 @@ Optload treats an upload as untrusted bytes, not as whatever its extension or
 processing route, normalizes supported images in a fresh worker, and makes the
 server path explicit when the browser cannot safely finish the job.
 
-> The browser pipeline and server orchestration are end to end and
-> security-hardened: bounded header inspection with defensive read limits,
-> post-decode dimension verification, per-route server policies, and deadlines
-> covering every pipeline stage. Server decoder adapters are integrator-supplied
-> isolated processes by design; the cross-browser matrix is tracked in
-> [SECURITY.md](./SECURITY.md).
+> Production ready: the browser pipeline, server orchestration, and a
+> process-isolated sharp decoder adapter are end to end and
+> security-hardened — bounded header inspection with defensive read limits,
+> post-decode dimension verification, per-route server policies, deadlines
+> covering every pipeline stage, and a cross-browser matrix generated from
+> real Playwright runs. See [SECURITY.md](./SECURITY.md) for the trust model
+> and the remaining deployment obligations.
 
 ## Why hybrid
 
@@ -37,6 +38,10 @@ server must remain the authority that decides what gets stored or served.
 - `@optload/server` — independent re-inspection, isolated-normalizer
   orchestration, deadlines, and output verification, with Promise and Effect
   entry points.
+- `@optload/sharp-normalizer` — the reference server decoder adapter: one
+  forked sharp/libvips process per image, header re-checks, raw-pixel
+  boundary, metadata and ICC stripping, sRGB-pinned output, and decode
+  probes that prove codec capability instead of trusting format tables.
 - `@optload/playground` — runnable Vite example demonstrating every scenario:
   the local worker route, the server fallback route, active-content rejection,
   mid-flight cancellation, and inspection warnings for mismatched files.
@@ -145,6 +150,33 @@ detach()
 worker. They never silently downgrade to UI-thread decoding. Use
 `execution: "main-thread"` only as an explicit compatibility tradeoff.
 
+On the server, re-inspect, decode, and re-encode in an isolated process:
+
+```sh
+pnpm add @optload/server @optload/sharp-normalizer
+```
+
+```ts
+import { createServerImageIntake } from "@optload/server"
+import { createSharpNormalizer, probeDecoders } from "@optload/sharp-normalizer"
+
+// Prove codec capability once at boot — the format table is not a codec
+// claim (prebuilt libvips decodes AV1, not HEVC).
+const decoders = await probeDecoders()
+if (!decoders.heic) {
+  // Route .heic uploads elsewhere, or reject them, before they reach intake.
+}
+
+const intake = createServerImageIntake({
+  normalizer: createSharpNormalizer(),
+  output: { format: "webp", maxWidth: 2048, maxHeight: 2048 },
+})
+
+const result = await intake.process(upload)
+// result.output is re-encoded from decoded pixels: no source metadata,
+// profiles, or appended bytes survive; the server verified it twice.
+```
+
 ## Defaults that are intentional
 
 - JPEG, PNG, WebP, AVIF, HEIC, and HEIF are recognized input formats.
@@ -153,12 +185,27 @@ worker. They never silently downgrade to UI-thread decoding. Use
 - Default intake limits are 32 MB, 33.5 MP, and 8,192 px per side; the decoded
   bitmap is re-verified against the pixel and dimension limits after decode,
   because a header can understate the real frame size.
-- Unknown dimensions and unavailable native codecs require server fallback.
+- A JPEG declaring several conflicting frame sizes in the inspected prefix is
+  judged by the largest and reported as `inconsistent_dimensions`.
+- Bytes past a container's end marker (PNG IEND, JPEG EOI, the declared WebP
+  RIFF extent) are reported as `trailing_data`; local re-encoding drops them,
+  and both server routes reject them by default.
+- EXIF, XMP, ICC, and text metadata are reported as `metadata_present`;
+  re-encoded output never carries them forward, but a server fallback that
+  stores the original file does.
+- Unknown dimensions, unavailable native codecs, and output formats the engine
+  cannot encode require server fallback.
 - Only a bounded file prefix is read during preflight.
 - One fresh worker processes one image and is then terminated.
 - Output is a newly encoded JPEG, PNG, or WebP blob; source metadata is not copied.
+- Drop targets accept an optional `maxFiles` cap so one adversarial drop cannot
+  enqueue unbounded decoder work.
 
-See [SECURITY.md](./SECURITY.md) for the trust model and server obligations.
+See [SECURITY.md](./SECURITY.md) for the trust model and server obligations,
+[docs/browser-matrix.md](./docs/browser-matrix.md) for verified per-engine
+behavior (regenerate with `pnpm test:browsers`), and
+[docs/security-research.md](./docs/security-research.md) for the incident
+research behind every rule.
 
 ## MediaBunny
 
@@ -172,6 +219,7 @@ resource limits, worker isolation, or server validation.
 ```sh
 pnpm install
 pnpm test
+pnpm test:browsers   # regenerate docs/browser-matrix.md from real engine runs
 pnpm typecheck
 pnpm lint
 pnpm dev

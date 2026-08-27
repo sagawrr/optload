@@ -1,6 +1,6 @@
 {
   "name": "@optload/server",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Effect-powered server image verification with Promise-first and native Effect APIs.",
   "type": "module",
   "sideEffects": false,
@@ -19,7 +19,8 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "typecheck": "tsc -b --pretty false"
+    "typecheck": "tsc -b --pretty false",
+    "prepublishOnly": "pnpm run build"
   },
   "engines": {
     "node": ">=20"

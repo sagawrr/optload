@@ -12,7 +12,7 @@ import {
   type PolicyIssue,
 } from '@optload/core';
 import { Duration, Effect, Either } from 'effect';
-import { canUseFreshWorker, nativeDecodeCapability } from './capabilities.js';
+import { canUseFreshWorker, nativeDecodeCapability, probeEncodeCapability } from './capabilities.js';
 import { attachDropTarget } from './drop.js';
 import { resolveOutputOptions, resolveTargetDimensions } from './options.js';
 import {
@@ -52,12 +52,21 @@ export function createImageIntakeEffect<
 >(
   config: EffectImageIntakeOptions<FallbackValue, FallbackError> = {},
 ): EffectImageIntake<FallbackValue, FallbackError> {
+  const encodeCache = new Map<string, Promise<boolean>>();
+  const encode = (format: string): Promise<boolean> => {
+    const cached = encodeCache.get(format);
+    if (cached) return cached;
+    const probe = probeEncodeCapability(format);
+    encodeCache.set(format, probe);
+    return probe;
+  };
+
   const plan = (
     file: File,
     options: ProcessImageOptions = {},
   ): Effect.Effect<ImagePlan, import('@optload/core').InspectionError> =>
     inspectFile(file).pipe(
-      Effect.flatMap((inspection) => makePlan(inspection, config, options)),
+      Effect.flatMap((inspection) => makePlan(inspection, config, options, encode)),
     );
 
   const process = (
@@ -74,7 +83,7 @@ export function createImageIntakeEffect<
       yield* reportProgress(onProgress, 'inspect', 0.05, 'Inspecting file…');
       const inspection = yield* inspectFile(file);
       yield* reportProgress(onProgress, 'plan', 0.16, 'Planning safe processing route…');
-      const imagePlan = yield* makePlan(inspection, config, options);
+      const imagePlan = yield* makePlan(inspection, config, options, encode);
 
       if (imagePlan.route === 'reject') {
         const reason =
@@ -132,6 +141,7 @@ function makePlan<FallbackValue, FallbackError>(
   inspection: ImageInspection,
   config: EffectImageIntakeOptions<FallbackValue, FallbackError>,
   options: ProcessImageOptions,
+  encode: (format: string) => Promise<boolean>,
 ): Effect.Effect<ImagePlan> {
   return Effect.gen(function* () {
     const policy = checkImagePolicy(inspection, config.policy);
@@ -177,14 +187,28 @@ function makePlan<FallbackValue, FallbackError>(
           })
         : null;
 
+    // Decode support alone is not a verdict: WebKit decodes WebP but cannot
+    // encode it from canvas. An unencodable output format routes to the
+    // server before any work is attempted, not after a doomed encode.
+    const encodable = yield* Effect.promise(() =>
+      encode(output.format).catch(() => false),
+    );
+    const encodeUnsupported =
+      !encodable && !unsupported
+        ? new EnvironmentUnsupportedError({
+            feature: `native ${output.format} encoding`,
+          })
+        : null;
+
+    const reason = unsupported ?? encodeUnsupported;
     return {
       inspection,
       policy,
-      route: unsupported ? 'fallback' : 'local',
+      route: reason ? 'fallback' : 'local',
       nativeDecode: capability,
       target,
       output,
-      reason: unsupported,
+      reason,
     };
   });
 }

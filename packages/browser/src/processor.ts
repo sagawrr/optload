@@ -1,6 +1,7 @@
 import {
   DecodeError,
   DecodedDimensionError,
+  DecodedDimensionMismatchError,
   EncodeError,
   EnvironmentUnsupportedError,
   type ImageInspection,
@@ -35,6 +36,22 @@ export interface LocalProcessorResult {
 }
 
 type CanvasSurface = OffscreenCanvas | HTMLCanvasElement;
+
+/**
+ * The frame the decoder should produce for this inspection. Decoding with
+ * `imageOrientation: 'from-image'` bakes in EXIF rotation, so orientations
+ * that swap axes map the raw header pair to its transposed form.
+ */
+function declaredDimensions(
+  inspection: ImageInspection,
+): { width: number | null; height: number | null } {
+  const { width, height, orientation } = inspection;
+  if (width === null || height === null) return { width, height };
+  if (orientation !== null && orientation >= 5) {
+    return { width: height, height: width };
+  }
+  return { width, height };
+}
 
 export function processOnCurrentThread(
   request: LocalProcessorRequest,
@@ -80,6 +97,26 @@ export function processOnCurrentThread(
               height: bitmap.height,
               maxDimension: request.limits.maxDimension,
               maxPixels: request.limits.maxPixels,
+            }),
+          );
+        }
+
+        // Within limits, the decoded frame must still match what the header
+        // declared (after EXIF orientation swaps axes): a decoder that
+        // silently produced a different frame means the header lied, and the
+        // output must come from the server route instead.
+        const declared = declaredDimensions(request.inspection);
+        if (
+          declared.width !== null &&
+          declared.height !== null &&
+          (bitmap.width !== declared.width || bitmap.height !== declared.height)
+        ) {
+          return yield* Effect.fail(
+            new DecodedDimensionMismatchError({
+              declaredWidth: declared.width,
+              declaredHeight: declared.height,
+              decodedWidth: bitmap.width,
+              decodedHeight: bitmap.height,
             }),
           );
         }
@@ -137,7 +174,10 @@ function drawBitmap(
 ): Effect.Effect<void, EncodeError> {
   return Effect.try({
     try: () => {
-      const context = surface.getContext('2d');
+      const context = surface.getContext('2d') as
+        | CanvasRenderingContext2D
+        | OffscreenCanvasRenderingContext2D
+        | null;
       if (!context) throw new Error('The 2D canvas context is unavailable.');
       context.imageSmoothingEnabled = true;
       context.imageSmoothingQuality = 'high';

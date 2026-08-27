@@ -122,6 +122,22 @@ describe('inspectImageBytes', () => {
     expect(result.width).toBeNull();
   });
 
+  it('skips the global color table when counting GIF frames', () => {
+    // The packed field declares a two-entry global color table whose bytes
+    // are all image separators; they are palette data, not frames.
+    const bytes = new Uint8Array(13 + 6);
+    bytes.set(ascii('GIF89a'), 0);
+    bytes.set([0x10, 0x00], 6);
+    bytes.set([0x10, 0x00], 8);
+    bytes.set([0x80], 10);
+    bytes.fill(0x2c, 13);
+
+    const result = inspectImageBytes(bytes, { fileSize: bytes.length });
+    expect(result.format).toBe('gif');
+    expect(result.frameCount).toBeNull();
+    expect(result.animated).toBeNull();
+  });
+
   it('never throws while inspecting a deterministic malformed corpus', () => {
     let state = 0x5eed1234;
     for (let length = 0; length <= 1024; length += 7) {
