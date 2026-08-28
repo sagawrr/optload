@@ -28,4 +28,14 @@ provide an Effect-returning normalizer.
 
 The normalizer output is inspected again and must satisfy output format, byte,
 dimension, pixel, frame, and animation policy. A worker thread is intentionally
-not accepted as sufficient isolation for native server codecs.
+not accepted as sufficient isolation for native server codecs. Accepted inputs
+and bounded outputs receive a full-container structural walk so PNG/JPEG
+terminal markers and WebP RIFF extents can be enforced.
+
+Server input has a non-overridable 64 MiB ceiling; route defaults are stricter
+(16 MiB for browser-normalized input and 32 MiB for original fallback).
+
+The `FileLike.size` supplied to this package must be the real stream length;
+enforce request-body limits before buffering. See the
+[security policy](https://github.com/sagawrr/optload/blob/main/SECURITY.md) for
+the complete deployment contract.

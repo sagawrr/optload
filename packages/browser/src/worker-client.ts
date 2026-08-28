@@ -37,11 +37,20 @@ export function processInFreshWorker(
         }
 
         let settled = false;
-        const cleanup = (): void => {
-          signal.removeEventListener('abort', cleanup);
+        function cleanup(): void {
+          signal.removeEventListener('abort', onAbort);
           worker.terminate();
-        };
-        signal.addEventListener('abort', cleanup, { once: true });
+        }
+        function onAbort(): void {
+          if (settled) return;
+          settled = true;
+          cleanup();
+        }
+        signal.addEventListener('abort', onAbort, { once: true });
+        if (signal.aborted) {
+          onAbort();
+          return;
+        }
 
         worker.addEventListener(
           'message',
@@ -82,7 +91,19 @@ export function processInFreshWorker(
         });
 
         const message: WorkerProcessRequest = { _tag: 'Process', request };
-        worker.postMessage(message);
+        try {
+          worker.postMessage(message);
+        } catch (reason) {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reject(
+            new EnvironmentUnsupportedError({
+              feature: 'module worker messaging',
+              reason,
+            }),
+          );
+        }
       }),
     catch: (reason) =>
       isOptloadError(reason)

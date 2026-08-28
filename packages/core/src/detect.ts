@@ -143,6 +143,45 @@ function skipFillBytes(bytes: Uint8Array, offset: number): number {
   return offset;
 }
 
+/** Finds an EOI after SOS while respecting stuffed bytes and scan markers. */
+function jpegEndAfterScan(bytes: Uint8Array, start: number): number | null {
+  let offset = start;
+  while (offset + 1 < bytes.length) {
+    if (byte(bytes, offset) !== 0xff) {
+      offset += 1;
+      continue;
+    }
+
+    offset = skipFillBytes(bytes, offset);
+    const marker = byte(bytes, offset);
+    offset += 1;
+    if (marker === 0x00 || isJpegStandaloneMarker(marker)) continue;
+    if (marker === 0xd9) return offset;
+    if (offset + 2 > bytes.length) return null;
+
+    const segmentLength = u16be(bytes, offset);
+    if (segmentLength < 2 || offset + segmentLength > bytes.length) return null;
+    offset += segmentLength;
+  }
+  return null;
+}
+
+function jpegTrailingDataAfterSos(
+  bytes: Uint8Array,
+  lengthOffset: number,
+): boolean | undefined {
+  if (lengthOffset + 2 > bytes.length) return undefined;
+  const scanHeaderLength = u16be(bytes, lengthOffset);
+  if (
+    scanHeaderLength < 2 ||
+    lengthOffset + scanHeaderLength > bytes.length
+  ) {
+    return undefined;
+  }
+  const imageEnd = jpegEndAfterScan(bytes, lengthOffset + scanHeaderLength);
+  return imageEnd === null ? undefined : imageEnd < bytes.length;
+}
+
 interface JpegSofState {
   width: number | null;
   height: number | null;
@@ -207,7 +246,7 @@ function detectJpeg(bytes: Uint8Array): DetectedHeader | null {
 
   const sof: JpegSofState = { width: null, height: null, count: 0, conflict: false };
   let orientation: ExifOrientation | null = null;
-  let trailingData = false;
+  let trailingData: boolean | undefined;
   let hasMetadata = false;
   let offset = 2;
 
@@ -222,7 +261,10 @@ function detectJpeg(bytes: Uint8Array): DetectedHeader | null {
       trailingData = offset < bytes.length;
       break;
     }
-    if (marker === 0xda) break;
+    if (marker === 0xda) {
+      trailingData = jpegTrailingDataAfterSos(bytes, offset);
+      break;
+    }
     if (isJpegStandaloneMarker(marker)) continue;
     if (offset + 2 > bytes.length) break;
 
@@ -293,7 +335,7 @@ function walkPngChunks(bytes: Uint8Array): PngChunkWalk {
       // Reaching IDAT without a preceding acTL rules animation out; keep
       // walking so IEND and metadata chunks after the image data are seen.
       sawIdat = true;
-    } else if (type === 'IEND') {
+    } else if (type === 'IEND' && length === 0) {
       iendEnd = next;
       break;
     } else if (pngMetadataChunks.has(type)) {
@@ -313,9 +355,13 @@ function walkPngChunks(bytes: Uint8Array): PngChunkWalk {
 function detectPng(bytes: Uint8Array): DetectedHeader | null {
   if (!matches(bytes, 0, [137, 80, 78, 71, 13, 10, 26, 10])) return null;
 
-  const width = bytes.length >= 24 ? u32be(bytes, 16) : null;
-  const height = bytes.length >= 24 ? u32be(bytes, 20) : null;
-  const colorType = bytes.length >= 26 ? byte(bytes, 25) : null;
+  const hasIhdr =
+    bytes.length >= 33 &&
+    u32be(bytes, 8) === 13 &&
+    ascii(bytes, 12, 4) === 'IHDR';
+  const width = hasIhdr ? u32be(bytes, 16) : null;
+  const height = hasIhdr ? u32be(bytes, 20) : null;
+  const colorType = hasIhdr ? byte(bytes, 25) : null;
   const walk = walkPngChunks(bytes);
 
   return {
@@ -329,7 +375,8 @@ function detectPng(bytes: Uint8Array): DetectedHeader | null {
     // Anything after IEND is invisible to PNG decoders but survives verbatim
     // storage: it is the appended-payload channel of polyglot and
     // truncated-overwrite leaks.
-    trailingData: walk.iendEnd !== null && walk.iendEnd < bytes.length,
+    trailingData:
+      walk.iendEnd === null ? undefined : walk.iendEnd < bytes.length,
     hasMetadata: walk.hasMetadata,
   };
 }
@@ -440,10 +487,11 @@ function detectWebp(
   const declaredSize = u32le(bytes, 4);
   const declaredEnd = declaredSize + 8;
   const trailingData =
-    declaredSize > 0 &&
+    declaredSize >= 4 &&
     Number.isSafeInteger(declaredEnd) &&
-    bytes.length >= declaredEnd &&
-    fileSize > declaredEnd;
+    fileSize >= declaredEnd
+      ? fileSize > declaredEnd
+      : undefined;
 
   return {
     format: 'webp',
@@ -716,6 +764,21 @@ function identityWarnings(
   return warnings;
 }
 
+function hasIncompleteTerminal(
+  detected: DetectedHeader,
+  headerWasTruncated: boolean | undefined,
+): boolean {
+  const terminalChecked =
+    detected.format === 'jpeg' ||
+    detected.format === 'png' ||
+    detected.format === 'webp';
+  return (
+    terminalChecked &&
+    !headerWasTruncated &&
+    detected.trailingData === undefined
+  );
+}
+
 function structureWarnings(
   detected: DetectedHeader,
   headerWasTruncated: boolean | undefined,
@@ -741,6 +804,14 @@ function structureWarnings(
       code: 'inconsistent_dimensions',
       message:
         'The header declares conflicting frame sizes; the largest declared size was used for policy.',
+    });
+  }
+
+  if (hasIncompleteTerminal(detected, headerWasTruncated)) {
+    warnings.push({
+      code: 'container_incomplete',
+      message:
+        'The complete file does not contain its required end marker or declared container extent.',
     });
   }
 
@@ -788,14 +859,25 @@ export function inspectImageBytes(
   bytes: Uint8Array,
   context: DetectContext,
 ): ImageInspection {
-  const detected = detectHeader(bytes, context.fileSize);
-  const extension = extensionFromName(context.fileName);
-  const declaredMediaType = context.declaredMediaType?.toLowerCase() || null;
+  const fileSize =
+    Number.isSafeInteger(context.fileSize) && context.fileSize >= bytes.length
+      ? context.fileSize
+      : bytes.length;
+  const fileName =
+    typeof context.fileName === 'string' ? context.fileName : undefined;
+  const declaredMediaType =
+    typeof context.declaredMediaType === 'string'
+      ? context.declaredMediaType.toLowerCase() || null
+      : null;
+  const headerWasTruncated =
+    context.headerWasTruncated === true || fileSize > bytes.length;
+  const detected = detectHeader(bytes, fileSize);
+  const extension = extensionFromName(fileName);
   const warnings = inspectionWarnings(
     detected,
     extension,
     declaredMediaType,
-    context.headerWasTruncated,
+    headerWasTruncated,
   );
 
   const pixels =
@@ -808,8 +890,8 @@ export function inspectImageBytes(
     mediaType: detected.format ? formatMediaTypes[detected.format] : null,
     extension,
     declaredMediaType,
-    fileName: context.fileName ?? null,
-    fileSize: context.fileSize,
+    fileName: fileName ?? null,
+    fileSize,
     bytesInspected: bytes.length,
     width: detected.width,
     height: detected.height,
@@ -822,4 +904,3 @@ export function inspectImageBytes(
     warnings,
   };
 }
-

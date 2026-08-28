@@ -144,7 +144,7 @@ async function runEngine(
 
   let browser: Awaited<ReturnType<BrowserType['launch']>> | undefined;
   try {
-    browser = await type.launch();
+    browser = await type.launch({ timeout: 30_000 });
   } catch (error) {
     report.scenarios['engine-launch'] =
       `unavailable on this host — ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`;

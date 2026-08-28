@@ -1,6 +1,8 @@
 import { Effect } from 'effect';
 import {
   AnimationNotAllowedError,
+  AnimationUnknownError,
+  ContainerIncompleteError,
   DimensionsUnknownError,
   FrameLimitExceededError,
   InputTooLargeError,
@@ -16,8 +18,10 @@ import type {
   ImageInspection,
   SupportedInputFormat,
 } from './types.js';
+import { imageFormats } from './types.js';
 
 export type UnknownDimensionBehavior = 'fallback' | 'reject';
+export type UnknownAnimationBehavior = 'fallback' | 'reject';
 
 export interface ImagePolicy {
   readonly allowedFormats?: readonly ImageFormat[];
@@ -26,6 +30,8 @@ export interface ImagePolicy {
   readonly maxSourceDimension?: number;
   readonly maxFrames?: number;
   readonly allowAnimation?: boolean;
+  /** Route or reject when animation/frame count cannot be established. */
+  readonly unknownAnimation?: UnknownAnimationBehavior;
   readonly unknownDimensions?: UnknownDimensionBehavior;
   /**
    * Reject files whose inspected bytes continue past the format's terminal
@@ -36,6 +42,8 @@ export interface ImagePolicy {
    * stored. Unknown for formats without a cheap terminal marker.
    */
   readonly rejectTrailingData?: boolean;
+  /** Reject JPEG/PNG/WebP when a full inspection cannot establish container end. */
+  readonly requireCompleteContainer?: boolean;
 }
 
 export interface ResolvedImagePolicy {
@@ -45,8 +53,10 @@ export interface ResolvedImagePolicy {
   readonly maxSourceDimension: number;
   readonly maxFrames: number;
   readonly allowAnimation: boolean;
+  readonly unknownAnimation: UnknownAnimationBehavior;
   readonly unknownDimensions: UnknownDimensionBehavior;
   readonly rejectTrailingData: boolean;
+  readonly requireCompleteContainer: boolean;
 }
 
 export type PolicyIssueCode = ImagePolicyError['code'];
@@ -69,14 +79,15 @@ export type ImagePolicyDecision =
       readonly issues: readonly PolicyIssue[];
     };
 
-const defaultAllowedFormats: readonly SupportedInputFormat[] = [
+const defaultAllowedFormats: readonly SupportedInputFormat[] = Object.freeze([
   'jpeg',
   'png',
   'webp',
   'avif',
   'heic',
   'heif',
-];
+]);
+const knownFormats = new Set<ImageFormat>(imageFormats);
 
 /**
  * Decode limits default to values that survive a lying or hostile header on
@@ -90,24 +101,68 @@ export const defaultImagePolicy: ResolvedImagePolicy = Object.freeze({
   maxSourceDimension: 8_192,
   maxFrames: 1,
   allowAnimation: false,
+  unknownAnimation: 'fallback',
   unknownDimensions: 'fallback',
   rejectTrailingData: false,
+  requireCompleteContainer: false,
 });
 
 export function resolveImagePolicy(policy: ImagePolicy = {}): ResolvedImagePolicy {
   return {
-    allowedFormats: policy.allowedFormats ?? defaultImagePolicy.allowedFormats,
-    maxInputBytes: policy.maxInputBytes ?? defaultImagePolicy.maxInputBytes,
-    maxSourcePixels: policy.maxSourcePixels ?? defaultImagePolicy.maxSourcePixels,
-    maxSourceDimension:
-      policy.maxSourceDimension ?? defaultImagePolicy.maxSourceDimension,
-    maxFrames: policy.maxFrames ?? defaultImagePolicy.maxFrames,
-    allowAnimation: policy.allowAnimation ?? defaultImagePolicy.allowAnimation,
+    allowedFormats: resolveAllowedFormats(policy.allowedFormats),
+    maxInputBytes: nonNegativeInteger(
+      policy.maxInputBytes,
+      defaultImagePolicy.maxInputBytes,
+    ),
+    maxSourcePixels: nonNegativeInteger(
+      policy.maxSourcePixels,
+      defaultImagePolicy.maxSourcePixels,
+    ),
+    maxSourceDimension: nonNegativeInteger(
+      policy.maxSourceDimension,
+      defaultImagePolicy.maxSourceDimension,
+    ),
+    maxFrames: nonNegativeInteger(policy.maxFrames, defaultImagePolicy.maxFrames),
+    allowAnimation: booleanOption(
+      policy.allowAnimation,
+      defaultImagePolicy.allowAnimation,
+    ),
+    unknownAnimation:
+      policy.unknownAnimation === 'fallback' || policy.unknownAnimation === 'reject'
+        ? policy.unknownAnimation
+        : defaultImagePolicy.unknownAnimation,
     unknownDimensions:
-      policy.unknownDimensions ?? defaultImagePolicy.unknownDimensions,
-    rejectTrailingData:
-      policy.rejectTrailingData ?? defaultImagePolicy.rejectTrailingData,
+      policy.unknownDimensions === 'fallback' || policy.unknownDimensions === 'reject'
+        ? policy.unknownDimensions
+        : defaultImagePolicy.unknownDimensions,
+    rejectTrailingData: booleanOption(
+      policy.rejectTrailingData,
+      defaultImagePolicy.rejectTrailingData,
+    ),
+    requireCompleteContainer: booleanOption(
+      policy.requireCompleteContainer,
+      defaultImagePolicy.requireCompleteContainer,
+    ),
   };
+}
+
+function resolveAllowedFormats(
+  formats: readonly ImageFormat[] | undefined,
+): readonly ImageFormat[] {
+  if (!Array.isArray(formats)) return defaultImagePolicy.allowedFormats;
+  return Object.freeze(
+    [...new Set(formats.filter((format) => knownFormats.has(format)))],
+  );
+}
+
+function nonNegativeInteger(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : fallback;
+}
+
+function booleanOption(value: boolean | undefined, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
 }
 
 function formatPolicyIssue(
@@ -224,23 +279,38 @@ function dimensionIssues(
 function animationIssues(
   inspection: ImageInspection,
   policy: ResolvedImagePolicy,
-): readonly PolicyIssue[] {
-  const issues: PolicyIssue[] = [];
+): DimensionCheck {
+  const rejected: PolicyIssue[] = [];
+  const fallback: PolicyIssue[] = [];
   if (inspection.animated === true && !policy.allowAnimation) {
-    issues.push({
+    rejected.push({
       code: 'ANIMATION_NOT_ALLOWED',
       message: 'Animated images are not enabled for this pipeline.',
       details: { frameCount: inspection.frameCount },
     });
   }
+  const animationUnknown =
+    inspection.animated === null ||
+    (policy.allowAnimation &&
+      inspection.animated === true &&
+      inspection.frameCount === null);
+  if (animationUnknown) {
+    const issue: PolicyIssue = {
+      code: 'ANIMATION_UNKNOWN',
+      message: 'Animation and frame count could not be established.',
+      details: {},
+    };
+    if (policy.unknownAnimation === 'reject') rejected.push(issue);
+    else fallback.push(issue);
+  }
   if (inspection.frameCount !== null && inspection.frameCount > policy.maxFrames) {
-    issues.push({
+    rejected.push({
       code: 'FRAME_LIMIT_EXCEEDED',
       message: `The image exceeds the ${policy.maxFrames}-frame limit.`,
       details: { actual: inspection.frameCount, maximum: policy.maxFrames },
     });
   }
-  return issues;
+  return { rejected, fallback };
 }
 
 function trailingDataIssue(
@@ -258,6 +328,29 @@ function trailingDataIssue(
   };
 }
 
+function incompleteContainerIssue(
+  inspection: ImageInspection,
+  policy: ResolvedImagePolicy,
+): PolicyIssue | null {
+  const terminalChecked =
+    inspection.format === 'jpeg' ||
+    inspection.format === 'png' ||
+    inspection.format === 'webp';
+  if (
+    !policy.requireCompleteContainer ||
+    !terminalChecked ||
+    inspection.trailingData !== null
+  ) {
+    return null;
+  }
+  return {
+    code: 'CONTAINER_INCOMPLETE',
+    message:
+      'The image container does not include its required end marker or declared extent.',
+    details: { format: inspection.format },
+  };
+}
+
 function isPolicyIssue(issue: PolicyIssue | null): issue is PolicyIssue {
   return issue !== null;
 }
@@ -268,19 +361,22 @@ export function checkImagePolicy(
 ): ImagePolicyDecision {
   const policy = resolveImagePolicy(inputPolicy);
   const dimensions = dimensionIssues(inspection, policy);
+  const animation = animationIssues(inspection, policy);
   const rejected = [
     formatPolicyIssue(inspection, policy),
     inputSizeIssue(inspection, policy),
     trailingDataIssue(inspection, policy),
     ...dimensions.rejected,
-    ...animationIssues(inspection, policy),
+    incompleteContainerIssue(inspection, policy),
+    ...animation.rejected,
   ].filter(isPolicyIssue);
 
   if (rejected.length > 0) {
     return { outcome: 'reject', policy, issues: rejected };
   }
-  if (dimensions.fallback.length > 0) {
-    return { outcome: 'fallback', policy, issues: dimensions.fallback };
+  const fallback = [...dimensions.fallback, ...animation.fallback];
+  if (fallback.length > 0) {
+    return { outcome: 'fallback', policy, issues: fallback };
   }
   return { outcome: 'accept', policy, issues: [] };
 }
@@ -334,6 +430,8 @@ function issueToError(
     }
     case 'ANIMATION_NOT_ALLOWED':
       return new AnimationNotAllowedError({ frameCount: inspection.frameCount });
+    case 'ANIMATION_UNKNOWN':
+      return new AnimationUnknownError();
     case 'FRAME_LIMIT_EXCEEDED':
       return new FrameLimitExceededError({
         actual: inspection.frameCount ?? 0,
@@ -341,6 +439,8 @@ function issueToError(
       });
     case 'TRAILING_DATA':
       return new TrailingDataError({ format: inspection.format });
+    case 'CONTAINER_INCOMPLETE':
+      return new ContainerIncompleteError({ format: inspection.format });
   }
 }
 

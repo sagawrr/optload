@@ -41,6 +41,7 @@ export type InspectionWarningCode =
   | 'animation_unknown'
   | 'header_truncated'
   | 'inconsistent_dimensions'
+  | 'container_incomplete'
   | 'trailing_data'
   | 'metadata_present';
 
@@ -64,7 +65,7 @@ export interface ImageInspection {
   readonly animated: boolean | null;
   readonly hasAlpha: boolean | null;
   readonly orientation: ExifOrientation | null;
-  /** Bytes continue past the format's terminal marker; null when unknown. */
+  /** Bytes continue past the format's terminal marker; null when not established. */
   readonly trailingData: boolean | null;
   readonly warnings: readonly InspectionWarning[];
 }

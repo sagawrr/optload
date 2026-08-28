@@ -20,4 +20,8 @@ and method names are identical, while callbacks and results remain composable
 Effects. Both entry points run the same Effect-native engine.
 
 Browser output remains untrusted and must be validated by the receiving server.
-See the repository `README.md` and `SECURITY.md` for the full contract.
+Default isolated execution never silently falls back to UI-thread decode, and
+one file drop is capped at 20 files unless a lower `maxFiles` is configured.
+See the [repository README](https://github.com/sagawrr/optload#readme) and
+[security policy](https://github.com/sagawrr/optload/blob/main/SECURITY.md) for
+the full contract.

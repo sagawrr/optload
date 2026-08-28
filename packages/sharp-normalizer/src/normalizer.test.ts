@@ -7,7 +7,6 @@ import {
   createSharpNormalizerEffect,
   hevcProbeBytes,
   probeDecoders,
-  supportedInputFormats,
 } from './index.js';
 import { Effect } from 'effect';
 import type { ServerNormalizationRequest } from '@optload/server';
@@ -94,7 +93,7 @@ describe('sharp normalizer', () => {
       create: { width: 4000, height: 1500, channels: 3, background: '#336699' },
     })
       .jpeg()
-      .withMetadata({ exif: { IFD0: { Orientation: '6' } } })
+      .withMetadata({ orientation: 6 })
       .toBuffer();
 
     const normalizer = createSharpNormalizer();
@@ -106,7 +105,8 @@ describe('sharp normalizer', () => {
     // Upright 1500x4000 fitted inside 2048x2048 without enlargement.
     expect(meta.width).toBeLessThanOrEqual(2048);
     expect(meta.height).toBeLessThanOrEqual(2048);
-    expect(meta.width).toBeGreaterThan(0);
+    expect(meta.height).toBe(2048);
+    expect(meta.width).toBe(768);
   }, 30_000);
 
   it('drops bytes appended past the PNG end marker', async () => {
@@ -143,6 +143,79 @@ describe('sharp normalizer', () => {
     await expect(
       normalizer.normalize(request(garbage)),
     ).rejects.toMatchObject({ _tag: 'UnsupportedFormatError' });
+  }, 30_000);
+
+  it('rejects active and unnecessary decoder formats in the child', async () => {
+    const svg = new TextEncoder().encode(
+      '<svg xmlns="http://www.w3.org/2000/svg"><text>not allowed</text></svg>',
+    );
+    const normalizer = createSharpNormalizer();
+
+    await expect(normalizer.normalize(request(svg))).rejects.toMatchObject({
+      _tag: 'UnsupportedFormatError',
+    });
+  }, 30_000);
+
+  it('enforces the encoded byte limit before output crosses IPC', async () => {
+    const source = await sharp({
+      create: { width: 64, height: 64, channels: 3, background: '#204080' },
+    })
+      .png()
+      .toBuffer();
+    const normalizer = createSharpNormalizer();
+
+    await expect(
+      normalizer.normalize({
+        ...request(source),
+        output: { ...outputOptions, maxOutputBytes: 1 },
+      }),
+    ).rejects.toMatchObject({ _tag: 'EncodeError' });
+  }, 30_000);
+
+  it('resizes to the configured output pixel budget before encoding', async () => {
+    const source = await sharp({
+      create: { width: 400, height: 200, channels: 3, background: '#204080' },
+    })
+      .png()
+      .toBuffer();
+    const normalizer = createSharpNormalizer();
+    const result = await normalizer.normalize({
+      ...request(source),
+      output: {
+        ...outputOptions,
+        maxWidth: 400,
+        maxHeight: 200,
+        maxOutputPixels: 10_000,
+      },
+    });
+    const metadata = await sharp(result.bytes).metadata();
+
+    expect((metadata.width ?? 0) * (metadata.height ?? 0)).toBeLessThanOrEqual(
+      10_000,
+    );
+  }, 30_000);
+
+  it('rejects a FileLike whose declared size does not match its bytes', async () => {
+    const source = await sharp({
+      create: { width: 16, height: 16, channels: 3, background: '#204080' },
+    })
+      .png()
+      .toBuffer();
+    const normalizer = createSharpNormalizer();
+    const mismatched = request(source);
+
+    await expect(
+      normalizer.normalize({
+        ...mismatched,
+        input: {
+          ...mismatched.input,
+          size: source.length - 1,
+          slice: () => ({
+            arrayBuffer: async () => new Uint8Array(source).slice().buffer,
+          }),
+        },
+      }),
+    ).rejects.toMatchObject({ _tag: 'DecodeError' });
   }, 30_000);
 
   it('exposes an Effect-native normalizer contract', async () => {
@@ -214,10 +287,6 @@ describe('sharp normalizer', () => {
   }, 30_000);
 
   it('reports HEIF codec capabilities honestly (probe, not format table)', async () => {
-    // The container claim in supportedInputFormats() is broader than pixel
-    // reality: prebuilts parse the HEIF container for any HEIF input.
-    expect(supportedInputFormats()).toContain('heif');
-
     const caps = await probeDecoders();
     // Official prebuilts decode AV1; HEVC needs a libvips built with
     // libde265. The probe must reflect actual pixel decode either way.

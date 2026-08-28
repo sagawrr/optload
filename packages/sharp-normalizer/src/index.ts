@@ -12,7 +12,6 @@ import {
 import { Effect } from 'effect';
 import { fork } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import type {
   ServerImageNormalizer,
@@ -32,7 +31,7 @@ export interface DecodeLimits {
 
 export interface SharpNormalizerOptions {
   /**
-   * Hard wall-clock budget per image. The child is SIGKILLed on expiry;
+   * Hard wall-clock budget for the child decode. The child is SIGKILLed on expiry;
    * a native decoder hang cannot outlive it. Defaults under the server
    * package's 30s pipeline deadline.
    */
@@ -63,6 +62,10 @@ export type SharpNormalizerError =
   | ProcessingTimeoutError;
 
 const defaultTimeoutMs = 25_000;
+const maximumTimeoutMs = 300_000;
+const maximumDecodePixels = 67_108_864;
+const maximumDecodeDimension = 32_768;
+const maximumOutputBytes = 64 * 1024 * 1024;
 const defaultDecodeLimits: DecodeLimits = {
   maxPixels: 33_554_432,
   maxDimension: 8_192,
@@ -78,8 +81,12 @@ const defaultDecodeLimits: DecodeLimits = {
 export function createSharpNormalizer(
   options: SharpNormalizerOptions = {},
 ): ServerImageNormalizer<NormalizedImageFile> {
-  const timeoutMs = positiveInt(options.timeoutMs, defaultTimeoutMs);
-  const decodeLimits = options.decodeLimits ?? defaultDecodeLimits;
+  const timeoutMs = boundedPositiveInt(
+    options.timeoutMs,
+    defaultTimeoutMs,
+    maximumTimeoutMs,
+  );
+  const decodeLimits = resolveDecodeLimits(options.decodeLimits);
 
   return {
     isolation: 'process',
@@ -96,8 +103,12 @@ export function createSharpNormalizer(
 export function createSharpNormalizerEffect(
   options: SharpNormalizerOptions = {},
 ): EffectServerImageNormalizer<NormalizedImageFile, SharpNormalizerError> {
-  const timeoutMs = positiveInt(options.timeoutMs, defaultTimeoutMs);
-  const decodeLimits = options.decodeLimits ?? defaultDecodeLimits;
+  const timeoutMs = boundedPositiveInt(
+    options.timeoutMs,
+    defaultTimeoutMs,
+    maximumTimeoutMs,
+  );
+  const decodeLimits = resolveDecodeLimits(options.decodeLimits);
 
   return {
     isolation: 'process',
@@ -128,14 +139,6 @@ function toNormalizerError(
     return cause as SharpNormalizerError;
   }
   return new DecodeError({ format, reason: cause });
-}
-
-/** Input containers this sharp build accepts from bytes (see probeDecoders). */
-export function supportedInputFormats(): readonly string[] {
-  const formats = ['jpeg', 'png', 'webp', 'tiff', 'gif', 'svg'] as const;
-  return heifDecodeSupported()
-    ? [...formats, 'avif', 'heic', 'heif']
-    : [...formats];
 }
 
 /**
@@ -198,24 +201,22 @@ const probeOutput: ServerNormalizationRequest['output'] = {
   quality: 0.8,
 };
 
-function heifDecodeSupported(): boolean {
-  // Resolved lazily so the parent process only loads sharp for the capability
-  // probe; the decode itself always lives in the forked child.
-  const require = createRequire(import.meta.url);
-  const sharp = require('sharp') as {
-    format: Record<string, { input?: { buffer?: boolean } }>;
-  };
-  return sharp.format.heif?.input?.buffer === true;
-}
-
 async function normalize(
   request: ServerNormalizationRequest,
   timeoutMs: number,
   decodeLimits: DecodeLimits,
 ): Promise<NormalizedImageFile> {
   const bytes = new Uint8Array(
-    await request.input.slice().arrayBuffer(),
+    await request.input.slice(0, request.input.size).arrayBuffer(),
   );
+  if (bytes.length !== request.input.size) {
+    throw new DecodeError({
+      format: request.inspection.format,
+      reason: new Error(
+        `The input returned ${bytes.length} bytes but declared ${request.input.size}.`,
+      ),
+    });
+  }
 
   return new Promise<NormalizedImageFile>((resolve, reject) => {
     if (request.signal?.aborted) {
@@ -255,6 +256,10 @@ async function normalize(
       );
     }
     request.signal?.addEventListener('abort', onAbort, { once: true });
+    if (request.signal?.aborted) {
+      onAbort();
+      return;
+    }
 
     child.on('message', (response: ChildResponse) => {
       finish(() => {
@@ -287,9 +292,27 @@ async function normalize(
       bytes,
       output: {
         format: request.output.format,
-        maxWidth: request.output.maxWidth,
-        maxHeight: request.output.maxHeight,
-        quality: request.output.quality,
+        maxWidth: boundedPositiveInt(
+          request.output.maxWidth,
+          4096,
+          maximumDecodeDimension,
+        ),
+        maxHeight: boundedPositiveInt(
+          request.output.maxHeight,
+          4096,
+          maximumDecodeDimension,
+        ),
+        maxOutputPixels: boundedPositiveInt(
+          request.output.maxOutputPixels,
+          16_777_216,
+          maximumDecodePixels,
+        ),
+        maxOutputBytes: boundedPositiveInt(
+          request.output.maxOutputBytes,
+          12 * 1024 * 1024,
+          maximumOutputBytes,
+        ),
+        quality: finiteClamp(request.output.quality, 0.88, 0, 1),
       },
       limits: decodeLimits,
     });
@@ -355,7 +378,41 @@ function childModulePath(): string {
 }
 
 function positiveInt(value: number | undefined, fallback: number): number {
-  return value !== undefined && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? value
+    : fallback;
+}
+
+function boundedPositiveInt(
+  value: number | undefined,
+  fallback: number,
+  maximum: number,
+): number {
+  return Math.min(maximum, positiveInt(value, fallback));
+}
+
+function resolveDecodeLimits(limits: DecodeLimits | undefined): DecodeLimits {
+  return Object.freeze({
+    maxPixels: boundedPositiveInt(
+      limits?.maxPixels,
+      defaultDecodeLimits.maxPixels,
+      maximumDecodePixels,
+    ),
+    maxDimension: boundedPositiveInt(
+      limits?.maxDimension,
+      defaultDecodeLimits.maxDimension,
+      maximumDecodeDimension,
+    ),
+  });
+}
+
+function finiteClamp(
+  value: number | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(maximum, Math.max(minimum, value))
     : fallback;
 }

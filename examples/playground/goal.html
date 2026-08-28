@@ -47,8 +47,8 @@
           <article class="route-card">
             <h2>Local</h2>
             <p>
-              A still image the browser can provably decode <em>and</em>
-              encode. One fresh worker per image verifies the decoded bitmap
+              A still image the browser can decode <em>and</em> encode in the
+              configured environment. One fresh worker per image verifies the decoded bitmap
               against the header's claims, then re-encodes it — source
               metadata, ICC profiles, and appended bytes do not survive.
             </p>
@@ -65,9 +65,9 @@
           <article class="route-card">
             <h2>Reject</h2>
             <p>
-              Active content disguised as an image, decompression-bomb
-              dimensions, animation when you did not ask for it, trailing data
-              past a container's end marker. Rejected before any decoder runs.
+              Recognized active image formats, decompression-bomb dimensions,
+              or animation when you did not ask for it. Rejected before any
+              decoder runs.
             </p>
           </article>
         </section>
@@ -75,7 +75,7 @@
 
       <footer class="goal-footer">
         <p>
-          The full trust model, incident research behind every rule, and the
+          The full trust model, primary evidence behind the controls, and the
           remaining deployment obligations live in the repository:
           <code>SECURITY.md</code>, <code>docs/security-research.md</code>,
           and the verified per-engine behavior in

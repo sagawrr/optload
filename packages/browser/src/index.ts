@@ -29,6 +29,8 @@ export type {
 
 export {
   AnimationNotAllowedError,
+  AnimationUnknownError,
+  ContainerIncompleteError,
   DecodeError,
   DimensionsUnknownError,
   EncodeError,
@@ -71,5 +73,6 @@ export {
   type PolicyIssueCode,
   type ResolvedImagePolicy,
   type SupportedInputFormat,
+  type UnknownAnimationBehavior,
   type UnknownDimensionBehavior,
 } from '@optload/core';

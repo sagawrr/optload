@@ -24,7 +24,7 @@
     "prepublishOnly": "pnpm run build"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.9.0"
   },
   "dependencies": {
     "@optload/core": "workspace:*",
@@ -33,6 +33,10 @@
     "sharp": "0.35.4"
   },
   "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/sagawrr/optload.git",

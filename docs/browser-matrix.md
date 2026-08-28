@@ -1,6 +1,6 @@
 # Cross-browser matrix
 
-Generated 2026-08-27 by `pnpm test:browsers` (Playwright driving the real
+Generated 2026-08-28 by `pnpm test:browsers` (Playwright driving the real
 package through its published exports in a Vite-served page). Every row
 below is an actual run, not a vendor claim.
 

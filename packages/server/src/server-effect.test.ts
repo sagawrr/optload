@@ -22,15 +22,20 @@ it.effect('keeps a native Effect server entry point', () =>
 );
 
 function pngFile(width: number, height: number): File {
-  const bytes = new Uint8Array(33);
-  bytes.set([137, 80, 78, 71, 13, 10, 26, 10]);
-  writeU32be(bytes, 8, 13);
-  bytes.set(ascii('IHDR'), 12);
-  writeU32be(bytes, 16, width);
-  writeU32be(bytes, 20, height);
-  bytes[24] = 8;
-  bytes[25] = 2;
-  return new File([bytes.buffer], 'input.png', { type: 'image/png' });
+  const header = new Uint8Array(33);
+  header.set([137, 80, 78, 71, 13, 10, 26, 10]);
+  writeU32be(header, 8, 13);
+  header.set(ascii('IHDR'), 12);
+  writeU32be(header, 16, width);
+  writeU32be(header, 20, height);
+  header[24] = 8;
+  header[25] = 2;
+  const bytes = new Uint8Array([
+    ...header,
+    0, 0, 0, 2, ...ascii('IDAT'), 0x78, 0x9c, 0, 0, 0, 0,
+    0, 0, 0, 0, ...ascii('IEND'), 0, 0, 0, 0,
+  ]);
+  return new File([bytes], 'input.png', { type: 'image/png' });
 }
 
 function webpFile(width: number, height: number): File {

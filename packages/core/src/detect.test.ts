@@ -63,6 +63,25 @@ describe('inspectImageBytes', () => {
     expect(result.frameCount).toBe(1);
   });
 
+  it('detects bytes appended after JPEG entropy data and EOI', () => {
+    const clean = jpegWithScan(32, 24);
+    const bytes = new Uint8Array([...clean, 0x50, 0x4b, 0x03, 0x04]);
+    const result = inspectImageBytes(bytes, { fileSize: bytes.length });
+
+    expect(result.trailingData).toBe(true);
+    expect(result.warnings.map(({ code }) => code)).toContain('trailing_data');
+  });
+
+  it('does not trust PNG dimensions unless the first chunk is IHDR', () => {
+    const bytes = pngHeader(1200, 800, 6);
+    bytes.set(ascii('fAKE'), 12);
+
+    const result = inspectImageBytes(bytes, { fileSize: bytes.length });
+    expect(result.format).toBe('png');
+    expect(result.width).toBeNull();
+    expect(result.height).toBeNull();
+  });
+
   it('detects extended WebP dimensions and animation', () => {
     const bytes = webpExtendedHeader(1920, 1080, true, true);
     const result = inspectImageBytes(bytes, {
@@ -122,6 +141,22 @@ describe('inspectImageBytes', () => {
     expect(result.width).toBeNull();
   });
 
+  it('contains malformed direct-call context and derives prefix truncation', () => {
+    const bytes = jpegHeader(32, 24);
+    const malformed = inspectImageBytes(bytes, {
+      fileSize: Number.POSITIVE_INFINITY,
+      fileName: 42 as unknown as string,
+      declaredMediaType: 42 as unknown as string,
+    });
+    const prefix = inspectImageBytes(bytes.subarray(0, bytes.length - 2), {
+      fileSize: bytes.length,
+    });
+
+    expect(malformed.fileSize).toBe(bytes.length);
+    expect(malformed.fileName).toBeNull();
+    expect(prefix.warnings.map(({ code }) => code)).toContain('header_truncated');
+  });
+
   it('skips the global color table when counting GIF frames', () => {
     // The packed field declares a two-entry global color table whose bytes
     // are all image separators; they are palette data, not frames.
@@ -159,7 +194,7 @@ describe('inspectImageBytes', () => {
 });
 
 function pngHeader(width: number, height: number, colorType: number): Uint8Array {
-  const bytes = new Uint8Array(47);
+  const bytes = new Uint8Array(59);
   bytes.set([137, 80, 78, 71, 13, 10, 26, 10]);
   writeU32be(bytes, 8, 13);
   bytes.set(ascii('IHDR'), 12);
@@ -170,6 +205,7 @@ function pngHeader(width: number, height: number, colorType: number): Uint8Array
   writeU32be(bytes, 33, 2);
   bytes.set(ascii('IDAT'), 37);
   bytes.set([0x78, 0x9c], 41);
+  bytes.set(ascii('IEND'), 51);
   return bytes;
 }
 
@@ -181,6 +217,16 @@ function jpegHeader(width: number, height: number): Uint8Array {
     (height >>> 8) & 0xff, height & 0xff,
     (width >>> 8) & 0xff, width & 0xff,
     0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00,
+    0xff, 0xd9,
+  ]);
+}
+
+function jpegWithScan(width: number, height: number): Uint8Array {
+  const header = jpegHeader(width, height);
+  return new Uint8Array([
+    ...header.subarray(0, header.length - 2),
+    0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00,
+    0x10, 0x20, 0xff, 0x00, 0x30,
     0xff, 0xd9,
   ]);
 }

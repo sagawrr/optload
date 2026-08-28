@@ -1,7 +1,6 @@
 export {
   createSharpNormalizerEffect as createSharpNormalizer,
   probeDecoders,
-  supportedInputFormats,
 } from './index.js';
 export type {
   DecodeLimits,

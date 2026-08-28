@@ -1,5 +1,7 @@
 export {
   AnimationNotAllowedError,
+  AnimationUnknownError,
+  ContainerIncompleteError,
   DecodeError,
   DecodedDimensionError,
   DecodedDimensionMismatchError,
@@ -38,6 +40,7 @@ export {
   type PolicyIssue,
   type PolicyIssueCode,
   type ResolvedImagePolicy,
+  type UnknownAnimationBehavior,
   type UnknownDimensionBehavior,
 } from './policy.js';
 export {

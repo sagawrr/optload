@@ -6,6 +6,8 @@ export interface ChildNormalizeRequest {
     readonly format: 'jpeg' | 'png' | 'webp';
     readonly maxWidth: number;
     readonly maxHeight: number;
+    readonly maxOutputPixels: number;
+    readonly maxOutputBytes: number;
     readonly quality: number;
   };
   readonly limits: {

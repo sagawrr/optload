@@ -7,13 +7,26 @@ import type { FileLike } from './types.js';
 describe('inspectImage', () => {
   it.effect('reads only the requested prefix of a larger file', () =>
     Effect.gen(function* () {
-      const file = fileLike(pngBytes(1200, 800), 600_000);
+      const bytes = new Uint8Array(600_000);
+      bytes.set(pngBytes(1200, 800));
+      const file = fileLike(bytes, bytes.length);
       const inspection = yield* inspectImage(file);
       expect(inspection.bytesInspected).toBeLessThanOrEqual(512 * 1024);
       expect(inspection.width).toBe(1200);
       expect(inspection.warnings.map(({ code }) => code)).toContain(
         'header_truncated',
       );
+    }),
+  );
+
+  it.effect('rejects a FileLike that returns fewer bytes than requested', () =>
+    Effect.gen(function* () {
+      const file: FileLike = {
+        size: 100,
+        slice: () => ({ arrayBuffer: async () => new ArrayBuffer(12) }),
+      };
+      const error = yield* inspectImage(file).pipe(Effect.flip);
+      expect(error._tag).toBe('InspectionReadError');
     }),
   );
 

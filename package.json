@@ -7,10 +7,12 @@
   "scripts": {
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
+    "audit:prod": "pnpm audit --prod --audit-level high",
     "build": "tsc -b",
     "clean": "tsc -b --clean && node -e \"fs.rmSync('examples/playground/node_modules/.vite',{recursive:true,force:true});fs.rmSync('sbom.cyclonedx.json',{force:true})\"",
     "dev": "pnpm --filter @optload/playground dev",
     "sbom:all": "node scripts/sbom.mjs",
+    "pretest": "pnpm build",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -b --pretty false && tsc -p tests --noEmit",

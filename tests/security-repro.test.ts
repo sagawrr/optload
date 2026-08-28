@@ -54,8 +54,16 @@ function pngHeaderBytes(width: number, height: number) {
   return bytes;
 }
 function pngFile(name: string, width: number, height: number): File {
-  const bytes = pngHeaderBytes(width, height);
+  const bytes = new Uint8Array([
+    ...pngHeaderBytes(width, height),
+    ...u32be(2), ...ascii('IDAT'), 0x78, 0x9c, ...u32be(0),
+    ...u32be(0), ...ascii('IEND'), ...u32be(0),
+  ]);
   return new File([bytes], name, { type: 'image/png' });
+}
+
+function incompletePngFile(name: string, width: number, height: number): File {
+  return new File([pngHeaderBytes(width, height)], name, { type: 'image/png' });
 }
 function webpFile(name: string, width: number, height: number): File {
   const bytes = new Uint8Array(30);
@@ -401,17 +409,16 @@ describe('V9: metadata presence warnings', () => {
   });
 });
 
-// V10 — normalizer output must prove it is still, not merely claim it
+// V10 — normalizer output must have a complete, inspectable container
 
-describe('V10: normalizer output must prove stillness', () => {
-  it('rejects PNG output whose animation state cannot be established', async () => {
+describe('V10: normalizer output must have a complete container', () => {
+  it('rejects PNG output that ends before IDAT/IEND', async () => {
     const intake = createServerImageIntake({
       output: { format: 'png' },
       normalizer: {
         isolation: 'external-service',
-        // IHDR-only output: the re-inspection never reaches IDAT, so
-        // animation cannot be ruled out from the bytes.
-        normalize: () => pngFile('out.png', 64, 64),
+        // IHDR-only output: the re-inspection cannot establish IEND.
+        normalize: () => incompletePngFile('out.png', 64, 64),
       },
     });
 
@@ -421,7 +428,7 @@ describe('V10: normalizer output must prove stillness', () => {
         () => 'accepted',
         (error: { code?: string }) => `rejected:${error.code ?? 'unknown'}`,
       );
-    expect(outcome).toBe('rejected:ANIMATION_NOT_ALLOWED');
+    expect(outcome).toBe('rejected:CONTAINER_INCOMPLETE');
   });
 
   it('accepts a well-formed still PNG output (control)', async () => {
@@ -579,4 +586,3 @@ function bmffHeicFile(width: number, height: number, withExif = false): File {
     type: 'image/heic',
   });
 }
-

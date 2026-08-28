@@ -93,6 +93,24 @@ describe('image intake routing', () => {
     });
   });
 
+  it('plans fallback when isolated workers are unavailable', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn());
+    vi.stubGlobal('ImageDecoder', {
+      isTypeSupported: () => Promise.resolve(true),
+    });
+    vi.stubGlobal('Worker', undefined);
+    vi.stubGlobal('OffscreenCanvas', undefined);
+
+    const intake = createImageIntake({ output: { format: 'jpeg' } });
+    const plan = await intake.plan(jpegFile(100, 100));
+
+    expect(plan.route).toBe('fallback');
+    expect(plan.reason).toMatchObject({
+      code: 'ENVIRONMENT_UNSUPPORTED',
+      feature: 'isolated module workers',
+    });
+  });
+
   it('routes a decoded-dimension breach away from local processing', async () => {
     // A header can understate the real frame size; the decoder is the
     // authority on what was actually decoded. The OffscreenCanvas stub

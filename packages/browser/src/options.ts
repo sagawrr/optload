@@ -18,12 +18,13 @@ export function resolveOutputOptions(
   inspection: ImageInspection,
   options: ImageOutputOptions = {},
 ): ResolvedImageOutputOptions {
+  const requested = options.format;
   const format =
-    !options.format || options.format === 'auto'
-      ? inspection.hasAlpha === true
+    requested === 'jpeg' || requested === 'png' || requested === 'webp'
+      ? requested
+      : inspection.hasAlpha === true
         ? 'png'
-        : 'webp'
-      : options.format;
+        : 'webp';
 
   const defaultQuality = format === 'jpeg' ? 0.86 : format === 'webp' ? 0.84 : 1;
   return {

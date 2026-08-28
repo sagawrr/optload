@@ -27,6 +27,7 @@ describe('browser output planning', () => {
 
   it('contains unsafe output configuration values', () => {
     const output = resolveOutputOptions(inspection(), {
+      format: 'gif' as 'webp',
       maxWidth: Number.MAX_VALUE,
       maxHeight: -1,
       quality: Number.NaN,
@@ -35,6 +36,7 @@ describe('browser output planning', () => {
     expect(output.maxWidth).toBe(32_768);
     expect(output.maxHeight).toBe(4096);
     expect(output.quality).toBe(0.84);
+    expect(output.format).toBe('webp');
   });
 });
 

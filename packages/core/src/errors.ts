@@ -93,6 +93,15 @@ export class AnimationNotAllowedError extends Data.TaggedError(
   override readonly message = 'Animated images are not enabled for this pipeline.';
 }
 
+export class AnimationUnknownError extends Data.TaggedError(
+  'AnimationUnknownError',
+)<{}> {
+  readonly code = 'ANIMATION_UNKNOWN' as const;
+  readonly stage = 'policy' as const;
+  override readonly message =
+    'Animation and frame count must be resolved before processing.';
+}
+
 export class FrameLimitExceededError extends Data.TaggedError('FrameLimitExceededError')<{
   readonly actual: number;
   readonly maximum: number;
@@ -156,6 +165,16 @@ export class TrailingDataError extends Data.TaggedError('TrailingDataError')<{
   override readonly message = `Bytes continue past the ${this.format ?? 'image'} container's end marker; appended data is not part of the image.`;
 }
 
+export class ContainerIncompleteError extends Data.TaggedError(
+  'ContainerIncompleteError',
+)<{
+  readonly format: ImageFormat | null;
+}> {
+  readonly code = 'CONTAINER_INCOMPLETE' as const;
+  readonly stage = 'policy' as const;
+  override readonly message = `The ${this.format ?? 'image'} container does not include its required end marker or declared extent.`;
+}
+
 export class EncodeError extends Data.TaggedError('EncodeError')<{
   readonly mediaType: string;
   readonly reason: unknown;
@@ -204,7 +223,9 @@ export type ImagePolicyError =
   | SourceDimensionExceededError
   | PixelLimitExceededError
   | AnimationNotAllowedError
+  | AnimationUnknownError
   | FrameLimitExceededError
+  | ContainerIncompleteError
   | TrailingDataError;
 
 export type ImageProcessingError =
@@ -223,12 +244,39 @@ export type OptloadError =
 
 export type OptloadErrorCode = OptloadError['code'];
 
+const errorIdentities: Readonly<
+  Record<OptloadError['_tag'], readonly [OptloadErrorCode, OptloadStage]>
+> = {
+  FileEmptyError: ['FILE_EMPTY', 'inspect'],
+  InspectionReadError: ['INSPECTION_READ_FAILED', 'inspect'],
+  UnsupportedFormatError: ['UNSUPPORTED_FORMAT', 'policy'],
+  InputTooLargeError: ['INPUT_TOO_LARGE', 'policy'],
+  DimensionsUnknownError: ['DIMENSIONS_UNKNOWN', 'policy'],
+  InvalidDimensionsError: ['INVALID_DIMENSIONS', 'policy'],
+  SourceDimensionExceededError: ['SOURCE_DIMENSION_EXCEEDED', 'policy'],
+  PixelLimitExceededError: ['PIXEL_LIMIT_EXCEEDED', 'policy'],
+  AnimationNotAllowedError: ['ANIMATION_NOT_ALLOWED', 'policy'],
+  AnimationUnknownError: ['ANIMATION_UNKNOWN', 'policy'],
+  FrameLimitExceededError: ['FRAME_LIMIT_EXCEEDED', 'policy'],
+  ContainerIncompleteError: ['CONTAINER_INCOMPLETE', 'policy'],
+  TrailingDataError: ['TRAILING_DATA', 'policy'],
+  DecodeError: ['DECODE_FAILED', 'decode'],
+  DecodedDimensionError: ['DECODED_DIMENSION_EXCEEDED', 'decode'],
+  DecodedDimensionMismatchError: ['DECODED_DIMENSION_MISMATCH', 'decode'],
+  EncodeError: ['ENCODE_FAILED', 'encode'],
+  ProcessingTimeoutError: ['TIMEOUT', 'transform'],
+  EnvironmentUnsupportedError: ['ENVIRONMENT_UNSUPPORTED', 'plan'],
+  ServerFallbackRequiredError: ['SERVER_FALLBACK_REQUIRED', 'fallback'],
+};
+
 export function isOptloadError(value: unknown): value is OptloadError {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    '_tag' in value &&
-    'code' in value &&
-    'stage' in value
-  );
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as {
+    readonly _tag?: unknown;
+    readonly code?: unknown;
+    readonly stage?: unknown;
+  };
+  if (typeof candidate._tag !== 'string') return false;
+  const identity = errorIdentities[candidate._tag as OptloadError['_tag']];
+  return identity?.[0] === candidate.code && identity[1] === candidate.stage;
 }

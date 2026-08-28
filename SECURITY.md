@@ -1,172 +1,139 @@
-# Optload security model
+# Optload security policy
 
-## The non-negotiable boundary
+## Supported versions
 
-Everything received from a browser is untrusted, including an Optload-generated
-blob and every client-supplied inspection field. Client processing improves UX,
-bandwidth, and privacy; it is not a security verdict.
+Security fixes are applied to the latest release line and `main`.
 
-A production server must independently:
+| Version | Supported |
+| --- | --- |
+| Latest 1.x | Yes |
+| Older releases | No |
+
+## Reporting a vulnerability
+
+Use [GitHub private vulnerability reporting](https://github.com/sagawrr/optload/security/advisories/new).
+Include the affected package/version, impact, reproduction, and any suggested
+mitigation. Do not open a public issue for an undisclosed vulnerability.
+
+## Trust boundary
+
+Everything received from a browser is untrusted, including blobs produced by
+Optload and every client-supplied inspection field. Browser processing is a UX,
+bandwidth, and privacy optimization; it is not a server security verdict.
+
+A production deployment must:
 
 1. enforce request and decompressed-body byte limits before buffering;
-2. identify the format from bytes rather than filename or `Content-Type`;
-3. enforce dimensions, total pixels, frames, and processing deadlines;
-4. decode in an isolated, memory/CPU-constrained process or service;
-5. patch codec and image-processing dependencies promptly;
-6. re-encode into an allowed output format rather than preserving arbitrary
-   source structure or metadata;
-7. verify the encoded output again before durable storage;
-8. serve uploads from a separate origin with fixed safe `Content-Type`,
+2. construct `FileLike.size` from the real stream length;
+3. identify formats from bytes and enforce byte, side, pixel, frame, and
+   deadline limits independently on the server;
+4. decode in a process/container/service boundary that can be terminated;
+5. add OS/container memory, CPU, filesystem, syscall, and egress controls when
+   a child process alone is not sufficient for the threat model;
+6. re-encode to a fixed output format and structurally re-inspect the result;
+7. store only normalized output, using server-generated names;
+8. serve it from a separate origin with a fixed `Content-Type`,
    `X-Content-Type-Options: nosniff`, and no user-controlled active content;
-9. build the server `FileLike` from the real stream length: `size` is what the
-   byte limit checks, and a wrapper that misreports it defeats `maxInputBytes`;
-10. honor the `AbortSignal` handed to normalizers so the configured deadline
-    stops the actual decode work instead of only failing the request;
-11. reject bytes past a container's terminal marker wherever bytes are
-    persisted (both server routes default `rejectTrailingData` to true —
-    appended data is the aCropalypse/polyglot channel);
-12. never run general-purpose EXIF/metadata tooling on untrusted input
-    (CVE-2021-22204 and CVE-2022-44268 class: metadata parsing is code
-    execution and file read);
-13. offer no "image from URL" intake; if a product requires it, the fetcher
-    must be an isolated, egress-controlled service applying the OWASP SSRF
-    prevention set (resolve-once, reject private/link-local results, no
-    redirects);
-14. store and serve only re-encoded output, never original upload bytes
-    (steganographic-C2 campaigns use image hosts as payload transport; the
-    re-encode is what destroys those channels — and for *pixel-domain* stego
-    it must be lossy or geometry-changing: a lossless PNG→PNG round-trip
-    preserves pixel LSBs, and Worok's PNG loader reads pixels only, so
-    metadata stripping alone does not stop it; optload's default WebP
-    outputs are lossy).
+9. patch browsers, Sharp/libvips, and codec dependencies promptly; and
+10. honor the normalizer `AbortSignal` so a failed request terminates decode
+    work rather than merely abandoning its result.
 
-## Browser defenses
+Remote URL intake is intentionally absent. A product that adds it needs a
+separate egress-controlled fetcher following the
+[OWASP SSRF prevention guidance](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html),
+including resolve-once address validation and redirect controls.
 
-| Risk | Current behavior |
+## Implemented controls
+
+| Area | Behavior |
 | --- | --- |
-| Forged MIME/extension | Magic-byte detection wins; mismatches are reported. |
-| Oversize transfer | `maxInputBytes` rejects before decode. |
-| Decompression bombs | Header dimensions/pixels are bounded before decode, and the decoded bitmap's dimensions are re-verified against the same limits after decode. |
-| Lying headers | A frame header that understates the real size still meets the post-decode verification; the image routes to server fallback instead of local processing. |
-| Conflicting frame declarations | A JPEG whose inspected prefix carries several SOF markers is judged by the largest declared frame and reported as `inconsistent_dimensions`. |
-| Appended data (polyglots, truncated-overwrite leaks) | Bytes past the PNG IEND chunk, the JPEG EOI marker, or the declared WebP RIFF extent are reported as `trailing_data`; local re-encoding drops them. |
-| Metadata leakage | Canvas output is newly encoded; source metadata is not copied. EXIF, XMP, ICC, and text chunks seen in the prefix are reported as `metadata_present`, because a server fallback that stores the original does not strip them. |
-| Decoder hang/crash | Default processing uses a fresh worker with a deadline. |
-| Worker contamination | A new worker is created for one image and is terminated. |
-| Active SVG | Recognized but rejected by the default bitmap policy. |
-| Animation/frame bombs | Animation and more than one frame are rejected when detectable in the inspected prefix; otherwise animation is reported as unknown rather than assumed still. |
-| Drop floods | Each accepted file runs a fresh decoder worker; `maxFiles` caps how many files a single drop can enqueue. |
-| Missing HEIC/AVIF codec | Explicit server fallback; no format guessing. |
-| Unencodable output format | Encode capability is proven with a real 1×1 probe before planning; formats the engine silently substitutes (WebKit returns PNG for `image/webp`) route to server fallback instead of a doomed encode. |
-| Page refresh on drop | File drags are intercepted globally; non-file drags are ignored. |
+| Identity | Magic bytes determine format; filename and declared MIME mismatches are warnings. |
+| Browser preflight | Reads a 512 KiB prefix by default and enforces input bytes, dimensions, pixels, formats, frames, animation, and optional trailing-data policy. Inconclusive dimension or animation state routes to fallback. |
+| Browser decode | Default execution uses a fresh module worker for one image. Decoded dimensions are checked against limits and the inspected declaration before resize. |
+| Browser encode | A real 1×1 probe verifies the requested canvas encoder. Returned blob type and nonzero length are checked. |
+| Browser fallback | Missing worker/codec/encoder capability, unknown dimensions, timeouts, and local failures invoke only the configured fallback. Policy rejections do not. |
+| Drop handling | File drags are handled without intercepting text/link drags; one drop is capped at 20 files by default. |
+| Server input | Route-specific policy is reapplied. Accepted inputs within the byte limit receive a full-container structural walk, enabling terminal-marker checks for PNG/JPEG and RIFF-extent checks for WebP. |
+| Server orchestration | The normalizer must declare process, container, or external-service isolation. A single deadline covers inspection, policy, normalization, and output checks. |
+| Server output | Format, byte size, dimensions, pixels, terminal markers, frame count, and proven stillness are checked again. |
+| Runtime configuration | Non-finite, unsafe, or malformed JavaScript values cannot erase stricter server route defaults. An invalid server source value selects the stricter browser-normalized route. |
+| Error transport | Decoder reasons crossing a worker/process boundary are converted to plain, truncated strings. |
 
-## Default limits
+Header inspection is deliberately a preflight, not a validity proof. It does
+not check every container checksum or replace a decoder. Browser workers reduce
+lifetime and cross-image state, but they do not strengthen the browser sandbox.
 
-| Route | Formats | Max bytes | Max pixels | Max dimension | Unknown dimensions |
-| --- | --- | --- | --- | --- | --- |
-| Browser intake | jpeg, png, webp, avif, heic, heif | 32 MB | 33,554,432 (≈ 8K frame) | 8,192 px | fallback |
-| Server, browser-normalized | jpeg, png, webp | 16 MB | 16,777,216 | 4,096 px | reject |
-| Server, original-fallback | all six input formats | 32 MB | 33,554,432 | 8,192 px | reject |
+## Default policies
 
-Both server routes merge defaults with configured policies by ignoring keys
-explicitly set to `undefined`, so a partially populated policy object cannot
-silently widen a limit back to the library-wide default. The server always
-rejects unknown dimensions: it is the last tier and has nowhere to fall back.
+| Route | Formats | Max bytes | Max pixels | Max side | Unknown dimensions/animation | Trailing data |
+| --- | --- | ---: | ---: | ---: | --- | --- |
+| Browser | JPEG, PNG, WebP, AVIF, HEIC, HEIF | 32 MiB | 33,554,432 | 8,192 | fallback | warn/re-encode |
+| Server: browser-normalized | JPEG, PNG, WebP | 16 MiB | 16,777,216 | 4,096 | reject | reject |
+| Server: original-fallback | all six inputs | 32 MiB | 33,554,432 | 8,192 | reject | reject |
+| Server output | configured JPEG/PNG/WebP | 12 MiB | 16,777,216 | 4,096 | reject | reject |
 
-Header inspection is a cheap preflight, not a proof that the full file is valid.
-A malicious file can lie in its header, and native browser decoders are part of
-the attack surface. Worker isolation reduces impact but does not create a browser
-sandbox stronger than the browser itself.
+Server policy objects discard malformed runtime overrides instead of allowing
+them to erase a stricter route default. Server input bytes have a hard 64 MiB
+ceiling; accepted input can therefore receive a complete structural walk. The
+server rejects inconclusive dimensions, animation, or frame count.
 
-The server output verification is deliberately stricter than its input policy:
-normalizer output must prove stillness (`animated === false` from the
-re-inspected bytes), mirroring the rule that the last tier rejects unknown
-dimensions rather than assuming the best.
+## Reference Sharp adapter
 
-## Route semantics
+`@optload/sharp-normalizer` uses one forked child per image. The child is killed
+on success, failure, abort, or its 25-second decode timeout. Inside that child:
 
-- `local`: preflight passed, the browser reports codec support, and isolated
-  processing succeeded. The resulting blob still requires server validation.
-- `fallback`: the input is policy-eligible, but local capability or processing
-  is insufficient. The configured handler owns the server request.
-- `reject`: the file violates policy. Rejected active or over-limit content is
-  not automatically forwarded to the broad-codec endpoint.
+- all libvips foreign loaders are blocked, then only JPEG, PNG, WebP, and HEIF
+  buffer loaders plus the raw-pixel intermediate are enabled;
+- the complete bytes are re-inspected and only JPEG, PNG, WebP, AVIF, HEIC, and
+  HEIF are admitted;
+- declared dimensions are checked before Sharp receives the bytes;
+- Sharp decodes to bounded, EXIF-oriented, 8-bit sRGB raw pixels;
+- decoded dimensions are checked again before resize and compared with the
+  header declaration;
+- only raw pixels cross into the resize/encode stage; and
+- output is resized to the configured side and pixel budgets, then encoded
+  bytes are capped before they cross IPC back to the parent.
 
-This distinction prevents a permissive fallback service from becoming a bypass
-for client-side policy.
+This boundary contains a decoder crash or hang and prevents state reuse between
+images. It does not enforce an OS memory or CPU quota. Containerize the service
+or use an external sandbox when those controls are required. The
+[libvips security checklist](https://github.com/libvips/libvips/blob/master/doc/developer-checklist.md#security)
+also recommends enabling only the loaders needed for untrusted data.
 
-## Dependency policy
+HEIF container support is not proof of HEVC pixel decode. `probeDecoders()`
+decodes embedded AV1 and HEVC samples in disposable children; route HEIC/HEIF
+elsewhere or reject them when the HEVC probe is false.
 
-- Pin security-sensitive runtime dependencies exactly where practical.
-- Keep dev-tooling version floors at or above versions with published fixes
-  (currently vite ≥ 7.3.5 and vitest ≥ 3.2.6); the lockfile resolves newer.
-- Keep the browser core small; codecs should come from the patched browser rather
-  than shipping a large native/Wasm codec bundle by default. libwebp
-  CVE-2023-4863 (in-the-wild exploited heap overflow, 2023) is the reference
-  case: every embedder of an unpatched codec was vulnerable regardless of
-  upload validation. CVE-2019-11932 is the companion case from the app side:
-  a double-free in a GIF library bundled into WhatsApp (and, per the
-  advisory, many other Android apps) fired while merely generating gallery
-  previews — preview generation is decode, and every embedder of a bundled
-  codec inherits its bugs.
-- Treat optional codec packs as separate, lazy-loaded trust domains.
-- Generate an SBOM before release: `pnpm sbom:all` emits
-  `sbom.cyclonedx.json` from the installed store, including the native
-  codec binaries (`@img/*`) and workspace packages that pnpm's built-in
-  `pnpm sbom` omits; CI attaches the file to every run. Dependency and
-  malicious-fixture tests run in `pnpm test`.
-- A server decoder must run behind an OS/container boundary; a JavaScript worker
-  thread alone is not adequate isolation for native codec failures. The
-  reference adapter forks one child process per image and pins sharp 0.35.4
-  (libvips 8.18.6, past the CVE-2026-35590 EXIF fix of 8.18.2); bump the pin
-  whenever a libvips CVE lands.
+## Dependency and CVE posture
 
-Incident research that informed these rules is collected in
-[docs/security-research.md](./docs/security-research.md), and the verified
-cross-engine behavior in [docs/browser-matrix.md](./docs/browser-matrix.md).
+As reviewed on 2026-08-28:
 
-## Reference decoder adapter
+- the production npm graph has no known advisories under `pnpm audit --prod`;
+- Sharp is pinned to 0.35.4 and its prebuilt bundle reports libvips 8.18.6;
+- Sharp's reviewed advisory for CVE-2026-33327, CVE-2026-33328,
+  CVE-2026-35590, and CVE-2026-35591 affects Sharp `<0.35.0` and is patched in
+  `>=0.35.0`: [GHSA-f88m-g3jw-g9cj](https://github.com/lovell/sharp/security/advisories/GHSA-f88m-g3jw-g9cj);
+- CI runs a high-severity production audit and emits a CycloneDX inventory that
+  includes installed `@img/*` native packages; and
+- pnpm applies a 24-hour minimum release age to dependency updates, while the
+  lockfile and exact runtime pins make CI installs reproducible.
 
-[`@optload/sharp-normalizer`](./packages/sharp-normalizer) is the shipped
-implementation of the server normalizer contract: one forked child process
-per image (SIGKILLed on settle, abort, or deadline), a header re-check before
-libvips sees bytes, decode to bounded raw pixels, and re-encode to the
-requested output format. It was selected over every practical alternative:
-wasm-vips is 2.2–8.3× slower than native sharp (libvips maintainer's figures),
-Jimp/squoosh-class tools are far behind, and the ImageMagick family is
-disqualified for untrusted input by the delegate-execution class this
-project's research documents. libvips has run continuously under OSS-Fuzz
-since 2019.
+An audit result is a point-in-time signal, not proof that bundled codecs are
+safe. Re-run the audit and review Sharp/libvips advisories before every release.
 
-Two honesty rules the adapter encodes:
+## Residual risks
 
-- The HEIF container claim is not a codec claim. Official prebuilt libvips
-  (sharp) parses any HEIF container but decodes only AV1 payloads — HEVC
-  pixels need a libvips built with libde265. `probeDecoders()` proves real
-  pixel decode in the forked child before you route heic/heif uploads.
-- Encoders can silently substitute formats (WebKit's canvas returns PNG for
-  `image/webp`). The browser planner probes encode capability with a real
-  1×1 encode and routes to the server when the output format cannot be
-  encoded, instead of attempting work that cannot succeed.
+- Native image decoders will continue to receive CVEs; isolation and patching
+  remain mandatory.
+- A custom `ServerImageNormalizer` is trusted to implement the isolation label
+  it declares. Optload can reject an invalid label but cannot attest a remote
+  service or container boundary.
+- `FileLike` is not a streaming enforcement primitive. Upstream request limits
+  and accurate lengths are mandatory.
+- Re-encoding removes container, appended-data, and metadata channels. It does
+  not reliably detect malware encoded in pixels, robust steganography, abusive
+  imagery, or policy-sensitive content.
+- Antivirus and content moderation are out of scope.
 
-Keep WebP (the default, lossy) or JPEG as the server output format; a
-lossless PNG round-trip preserves pixel-domain stego (obligation 14).
-
-## Status
-
-- Server orchestration and a production decoder adapter are shipped; a
-  native decoder still belongs behind a container boundary where the threat
-  model demands it (the adapter forks per image; containerize the whole
-  service for defense in depth).
-- The cross-browser matrix is generated from real Playwright runs
-  (`pnpm test:browsers`) and refreshed by CI; engines unavailable on a given
-  host are reported, not silently skipped.
-- Color handling is pinned: decode applies the source ICC profile
-  (`colorSpaceConversion: 'default'`), canvas output is 8-bit sRGB, the sharp
-  adapter re-encodes via `toColourspace('srgb')`, and neither route ever
-  carries a source ICC profile forward.
-- Animated-image preservation is intentionally unsupported.
-- Client-side antivirus and content moderation are out of scope.
-
-Do not present any deployment as secure until the server obligations above
-are met end to end.
+The concise primary-source record behind these controls is in
+[docs/security-research.md](./docs/security-research.md).

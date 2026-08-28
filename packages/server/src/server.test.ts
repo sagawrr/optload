@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createServerImageIntake } from './promise-server.js';
+import { resolveServerOutputOptions } from './server.js';
 
 describe('server image intake', () => {
   it('re-inspects and constrains browser-normalized output', async () => {
@@ -158,18 +159,108 @@ describe('server image intake', () => {
       code: 'UNSAFE_NORMALIZER',
     });
   });
+
+  it('does not widen the route when JavaScript passes an invalid source', async () => {
+    let normalizerCalled = false;
+    const intake = createServerImageIntake({
+      normalizer: {
+        isolation: 'process',
+        normalize: () => {
+          normalizerCalled = true;
+          return webpFile('output.webp', 10, 10);
+        },
+      },
+    });
+
+    await expect(
+      intake.process(bmffFile('heic', 1600, 1200), {
+        source: 'typo' as 'original-fallback',
+      }),
+    ).rejects.toMatchObject({ _tag: 'UnsupportedFormatError' });
+    expect(normalizerCalled).toBe(false);
+  });
+
+  it('rejects JPEG trailing data after the entropy-coded scan', async () => {
+    let normalizerCalled = false;
+    const intake = createServerImageIntake({
+      normalizer: {
+        isolation: 'process',
+        normalize: () => {
+          normalizerCalled = true;
+          return webpFile('output.webp', 10, 10);
+        },
+      },
+    });
+
+    await expect(intake.process(jpegWithTrailingData())).rejects.toMatchObject({
+      _tag: 'TrailingDataError',
+    });
+    expect(normalizerCalled).toBe(false);
+  });
+
+  it('contains malformed runtime output configuration', () => {
+    const output = resolveServerOutputOptions({
+      format: 'gif' as 'webp',
+      maxOutputBytes: Number.MAX_SAFE_INTEGER,
+      maxOutputPixels: Number.POSITIVE_INFINITY,
+    });
+
+    expect(output.format).toBe('webp');
+    expect(output.maxOutputBytes).toBe(64 * 1024 * 1024);
+    expect(output.maxOutputPixels).toBe(16_777_216);
+  });
+
+  it('does not let malformed input policy widen a stricter server route', async () => {
+    let normalizerCalled = false;
+    const intake = createServerImageIntake({
+      inputPolicy: { maxInputBytes: Number.POSITIVE_INFINITY },
+      normalizer: {
+        isolation: 'process',
+        normalize: () => {
+          normalizerCalled = true;
+          return webpFile('output.webp', 10, 10);
+        },
+      },
+    });
+    const bytes = new Uint8Array(16 * 1024 * 1024 + 1);
+    const complete = new Uint8Array(await pngFile('large.png', 10, 10).arrayBuffer());
+    bytes.set(complete);
+
+    await expect(
+      intake.process(new File([bytes], 'large.png', { type: 'image/png' })),
+    ).rejects.toMatchObject({ _tag: 'InputTooLargeError' });
+    expect(normalizerCalled).toBe(false);
+  });
 });
 
+function jpegWithTrailingData(): File {
+  const bytes = new Uint8Array([
+    0xff, 0xd8,
+    0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x10, 0x00, 0x10,
+    0x01, 0x01, 0x11, 0x00,
+    0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00,
+    0x10, 0x20, 0xff, 0x00, 0x30,
+    0xff, 0xd9,
+    0x50, 0x4b, 0x03, 0x04,
+  ]);
+  return new File([bytes], 'polyglot.jpg', { type: 'image/jpeg' });
+}
+
 function pngFile(name: string, width: number, height: number): File {
-  const bytes = new Uint8Array(33);
-  bytes.set([137, 80, 78, 71, 13, 10, 26, 10]);
-  writeU32be(bytes, 8, 13);
-  bytes.set(ascii('IHDR'), 12);
-  writeU32be(bytes, 16, width);
-  writeU32be(bytes, 20, height);
-  bytes[24] = 8;
-  bytes[25] = 2;
-  return new File([bytes.buffer], name, { type: 'image/png' });
+  const header = new Uint8Array(33);
+  header.set([137, 80, 78, 71, 13, 10, 26, 10]);
+  writeU32be(header, 8, 13);
+  header.set(ascii('IHDR'), 12);
+  writeU32be(header, 16, width);
+  writeU32be(header, 20, height);
+  header[24] = 8;
+  header[25] = 2;
+  const bytes = new Uint8Array([
+    ...header,
+    0, 0, 0, 2, ...ascii('IDAT'), 0x78, 0x9c, 0, 0, 0, 0,
+    0, 0, 0, 0, ...ascii('IEND'), 0, 0, 0, 0,
+  ]);
+  return new File([bytes], name, { type: 'image/png' });
 }
 
 function webpFile(name: string, width: number, height: number): File {

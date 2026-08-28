@@ -1,76 +1,68 @@
 # @optload/sharp-normalizer
 
-Production decoder adapter for `@optload/server`: a process-isolated
-sharp/libvips normalizer implementing the `ServerImageNormalizer` contract.
+Reference Sharp/libvips decoder adapter for `@optload/server`. It implements the
+`ServerImageNormalizer` contract with one forked child per image.
 
-## Why sharp
+## Isolation and limits
 
-Evaluated against every practical alternative for decoding untrusted input in
-Node: wasm-vips is 2.2–8.3× slower than native sharp (libvips maintainer's own
-figures), jimp and squoosh-class tools are pure-JS and far behind, and the
-ImageMagick family is both slower and disqualified for untrusted input by the
-delegate-execution class (ImageTragick, CVE-2022-44268). sharp wraps libvips —
-demand-driven, tiled decoding that never materializes unbounded bitmaps — and
-the prebuilt binaries bundle patched codecs (libvips 8.18.6, past the
-CVE-2026-35590 EXIF fix). libvips has run continuously under OSS-Fuzz since
-2019.
+The child is killed when the request succeeds, fails, is aborted, or exceeds its
+decode timeout (25 seconds by default). No decoder state is reused across
+images.
 
-## Isolation model
+Inside the child:
 
-One forked child per image, `SIGKILL`ed when the request settles, the abort
-signal fires, or the wall-clock budget (default 25 s, under the server
-package's 30 s deadline) expires. A decoder crash or hang is contained, and no
-state survives between images.
+1. all libvips foreign loaders are blocked;
+2. only JPEG, PNG, WebP, and HEIF buffer loaders plus the raw-pixel
+   intermediate are enabled;
+3. the full input is re-inspected and restricted to JPEG, PNG, WebP, AVIF,
+   HEIC, or HEIF;
+4. declared dimensions are checked before Sharp sees the bytes;
+5. decode materializes bounded, EXIF-oriented, 8-bit sRGB raw pixels;
+6. decoded dimensions are checked and compared with the declaration before
+   resize;
+7. output is resized to the configured side and pixel budgets; and
+8. encoded output size is checked before bytes cross IPC to the parent.
 
-Inside the child, before libvips sees any byte:
+Only raw pixels enter the second encode stage, so source container structure,
+appended bytes, EXIF, and source ICC profiles are not copied to output.
 
-1. the header is re-inspected and its declared dimensions checked against the
-   decode budget (defense in depth for direct users of this package);
-2. decode proceeds with sharp's own `limitInputPixels` as a second bound.
-
-The output is fully normalized: EXIF-oriented upright, resized inside the
-target box without enlargement, stripped of all source metadata and ICC
-profiles, and pinned to 8-bit sRGB. Stored bytes are only pixels this adapter
-produced — never input structure.
+A child process contains crashes/hangs and prevents state reuse; it is not an
+OS memory or CPU sandbox. Containerize the service or use an external sandbox
+when the deployment threat model requires resource, filesystem, syscall, or
+egress controls.
 
 ## Usage
 
 ```ts
-import { createServerImageIntake } from '@optload/server';
-import { createSharpNormalizer } from '@optload/sharp-normalizer';
+import { createServerImageIntake } from '@optload/server'
+import { createSharpNormalizer } from '@optload/sharp-normalizer'
 
 const intake = createServerImageIntake({
   normalizer: createSharpNormalizer(),
   output: { format: 'webp', maxWidth: 2048, maxHeight: 2048 },
-});
+})
 
-const result = await intake.process(upload);
+const result = await intake.process(upload, {
+  source: 'original-fallback',
+  signal: request.signal,
+})
 ```
 
-For Effect integrators, the `/effect` entry preserves the typed error channel
-(`SharpNormalizerError`) and interruption — aborting the fiber SIGKILLs the
-forked child:
+Effect users keep the same factory names:
 
 ```ts
-import { createServerImageIntakeEffect } from '@optload/server/effect';
-import { createSharpNormalizer } from '@optload/sharp-normalizer/effect';
+import { createServerImageIntake } from '@optload/server/effect'
+import { createSharpNormalizer } from '@optload/sharp-normalizer/effect'
 
-const intake = createServerImageIntakeEffect({
+const intake = createServerImageIntake({
   normalizer: createSharpNormalizer(),
-});
+})
 ```
 
-`supportedInputFormats()` reports container-level input support (jpeg,
-png, webp, tiff, gif, svg, plus the HEIF family when libheif is compiled in).
-For the HEIF family the container claim is not enough: official prebuilt
-libvips decodes AV1 payloads (AVIF) but ships without libde265, so `.heic`
-HEVC files parse and then fail the pixel decode. Call `probeDecoders()` once
-at boot — it proves real pixel decode of embedded probe images in the forked
-child — and route `heic`/`heif` uploads to a build of libvips with libde265
-(or reject them) when the probe reports false.
+HEIF container support does not prove HEVC pixel decode. Official prebuilt
+Sharp binaries decode AV1-backed AVIF, while HEVC-backed HEIC/HEIF depends on
+the bundled libvips build. Call `probeDecoders()` at boot; reject or reroute
+HEIC/HEIF when its HEVC result is false.
 
-Keep WebP (the default, lossy) or JPEG as the server output format: a
-lossless PNG round-trip preserves pixel-domain stego (see SECURITY.md,
-obligation 14).
-
-See [SECURITY.md](../../SECURITY.md) for the full server obligations.
+See the [security policy](https://github.com/sagawrr/optload/blob/main/SECURITY.md)
+for request-stream, storage, serving-origin, and container obligations.

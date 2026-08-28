@@ -8,6 +8,8 @@ interface DropImageProcessor<FallbackValue> {
   readonly process: (file: File) => Promise<ImageResult<FallbackValue>>;
 }
 
+const defaultMaxDropFiles = 20;
+
 export function attachDropTarget<FallbackValue>(
   intake: DropImageProcessor<FallbackValue>,
   target: DropTarget,
@@ -78,9 +80,9 @@ function reportActive<FallbackValue>(
 
 /** An adversarial drop can carry thousands of files; each one runs a decoder. */
 function maxDropFiles(value: number | undefined): number {
-  return value !== undefined && Number.isFinite(value) && value > 0
+  return value !== undefined && Number.isSafeInteger(value) && value > 0
     ? Math.floor(value)
-    : Number.POSITIVE_INFINITY;
+    : defaultMaxDropFiles;
 }
 
 async function processSequentially<FallbackValue>(

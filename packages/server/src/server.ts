@@ -1,8 +1,8 @@
 import {
-  AnimationNotAllowedError,
   ProcessingTimeoutError,
   enforceImagePolicy,
   inspectImage,
+  resolveImagePolicy,
   type FileLike,
   type ImagePolicy,
 } from '@optload/core';
@@ -31,6 +31,10 @@ const mediaTypes: Readonly<Record<ServerOutputFormat, string>> = {
 };
 
 const hardMaxOutputDimension = 32_768;
+const hardMaxOutputPixels = 67_108_864;
+const hardMaxOutputBytes = 64 * 1024 * 1024;
+const hardMaxInputBytes = 64 * 1024 * 1024;
+const hardMaxTimeoutMs = 300_000;
 const defaultBrowserInputPolicy: ImagePolicy = {
   allowedFormats: ['jpeg', 'png', 'webp'],
   maxInputBytes: 16 * 1024 * 1024,
@@ -38,11 +42,13 @@ const defaultBrowserInputPolicy: ImagePolicy = {
   maxSourceDimension: 4096,
   maxFrames: 1,
   allowAnimation: false,
+  unknownAnimation: 'reject',
   unknownDimensions: 'reject',
   // The server tier persists bytes, and appended bytes past a container's
   // terminal marker survive storage verbatim: polyglot payloads and
   // truncated-overwrite leaks live there.
   rejectTrailingData: true,
+  requireCompleteContainer: true,
 };
 
 /**
@@ -57,8 +63,10 @@ const defaultFallbackInputPolicy: ImagePolicy = {
   maxSourceDimension: 8192,
   maxFrames: 1,
   allowAnimation: false,
+  unknownAnimation: 'reject',
   unknownDimensions: 'reject',
   rejectTrailingData: true,
+  requireCompleteContainer: true,
 };
 
 const allowedIsolation = new Set<NormalizerIsolation>([
@@ -74,7 +82,11 @@ export function createServerImageIntakeEffect<
   config: EffectServerImageIntakeOptions<Output, NormalizerError>,
 ): EffectServerImageIntake<Output, NormalizerError> {
   const output = resolveServerOutputOptions(config.output);
-  const timeoutMs = positiveInteger(config.timeoutMs, 30_000);
+  const timeoutMs = boundedPositiveInteger(
+    config.timeoutMs,
+    30_000,
+    hardMaxTimeoutMs,
+  );
 
   const process = (
     input: FileLike,
@@ -82,12 +94,13 @@ export function createServerImageIntakeEffect<
   ) =>
     Effect.gen(function* () {
       const startedAt = performanceNow();
-      const source = options.source ?? 'browser-normalized';
-      const inputInspection = yield* inspectImage(input);
-      yield* enforceImagePolicy(
-        inputInspection,
-        inputPolicyFor(source, config),
+      const source = resolveSource(options.source);
+      const inputPolicy = inputPolicyFor(source, config);
+      const inputInspection = yield* inspectImage(
+        input,
+        fullInspectionOptions(input, resolveImagePolicy(inputPolicy).maxInputBytes),
       );
+      yield* enforceImagePolicy(inputInspection, inputPolicy);
 
       const isolation = config.normalizer.isolation;
       if (!allowedIsolation.has(isolation)) {
@@ -101,19 +114,11 @@ export function createServerImageIntakeEffect<
         output,
       });
 
-      const outputInspection = yield* inspectImage(normalized);
+      const outputInspection = yield* inspectImage(
+        normalized,
+        fullInspectionOptions(normalized, output.maxOutputBytes),
+      );
       yield* enforceImagePolicy(outputInspection, outputPolicy(output));
-      // The server is the last tier: like unknown dimensions, animation that
-      // cannot be ruled out from the re-inspected bytes is rejected rather
-      // than assumed absent. A normalizer that emits animation state the
-      // header cannot confirm is itself suspect.
-      if (outputInspection.animated !== false) {
-        return yield* Effect.fail(
-          new AnimationNotAllowedError({
-            frameCount: outputInspection.frameCount,
-          }),
-        );
-      }
       if (
         outputInspection.width !== null &&
         outputInspection.height !== null &&
@@ -154,14 +159,25 @@ export function createServerImageIntakeEffect<
 export function resolveServerOutputOptions(
   options: ServerOutputOptions = {},
 ): ResolvedServerOutputOptions {
-  const format = options.format ?? 'webp';
+  const format =
+    options.format === 'jpeg' || options.format === 'png' || options.format === 'webp'
+      ? options.format
+      : 'webp';
   return {
     format,
     mediaType: mediaTypes[format],
     maxWidth: positiveDimension(options.maxWidth, 4096),
     maxHeight: positiveDimension(options.maxHeight, 4096),
-    maxOutputPixels: positiveInteger(options.maxOutputPixels, 16_777_216),
-    maxOutputBytes: positiveInteger(options.maxOutputBytes, 12 * 1024 * 1024),
+    maxOutputPixels: boundedPositiveInteger(
+      options.maxOutputPixels,
+      16_777_216,
+      hardMaxOutputPixels,
+    ),
+    maxOutputBytes: boundedPositiveInteger(
+      options.maxOutputBytes,
+      12 * 1024 * 1024,
+      hardMaxOutputBytes,
+    ),
     quality: finiteClamp(options.quality, 0.88, 0, 1),
   };
 }
@@ -174,19 +190,29 @@ function outputPolicy(output: ResolvedServerOutputOptions): ImagePolicy {
     maxSourceDimension: Math.max(output.maxWidth, output.maxHeight),
     maxFrames: 1,
     allowAnimation: false,
+    unknownAnimation: 'reject',
     unknownDimensions: 'reject',
     rejectTrailingData: true,
+    requireCompleteContainer: true,
   };
 }
 
 function positiveInteger(value: number | undefined, fallback: number): number {
-  return value && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? value
     : fallback;
 }
 
+function boundedPositiveInteger(
+  value: number | undefined,
+  fallback: number,
+  maximum: number,
+): number {
+  return Math.min(maximum, positiveInteger(value, fallback));
+}
+
 function positiveDimension(value: number | undefined, fallback: number): number {
-  return Math.min(hardMaxOutputDimension, positiveInteger(value, fallback));
+  return boundedPositiveInteger(value, fallback, hardMaxOutputDimension);
 }
 
 function finiteClamp(
@@ -200,16 +226,45 @@ function finiteClamp(
     : fallback;
 }
 
-/**
- * Object spread lets an explicitly `undefined` key override a layered default,
- * after which `resolveImagePolicy` falls back to the looser core defaults.
- * Dropping undefined keys keeps an unconfigured field on the stricter
- * route-level default instead of silently widening it.
- */
-function definedPolicy(policy: ImagePolicy | undefined): ImagePolicy {
-  return Object.fromEntries(
-    Object.entries(policy ?? {}).filter(([, value]) => value !== undefined),
-  ) as ImagePolicy;
+function validPolicyNumber(value: number | undefined): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** Retains only runtime values that cannot erase stricter route defaults. */
+function safePolicyOverride(policy: ImagePolicy | undefined): ImagePolicy {
+  if (!policy) return {};
+  return {
+    ...(Array.isArray(policy.allowedFormats)
+      ? { allowedFormats: policy.allowedFormats }
+      : {}),
+    ...(validPolicyNumber(policy.maxInputBytes)
+      ? { maxInputBytes: policy.maxInputBytes }
+      : {}),
+    ...(validPolicyNumber(policy.maxSourcePixels)
+      ? { maxSourcePixels: policy.maxSourcePixels }
+      : {}),
+    ...(validPolicyNumber(policy.maxSourceDimension)
+      ? { maxSourceDimension: policy.maxSourceDimension }
+      : {}),
+    ...(validPolicyNumber(policy.maxFrames) ? { maxFrames: policy.maxFrames } : {}),
+    ...(typeof policy.allowAnimation === 'boolean'
+      ? { allowAnimation: policy.allowAnimation }
+      : {}),
+    ...(policy.unknownAnimation === 'fallback' ||
+    policy.unknownAnimation === 'reject'
+      ? { unknownAnimation: policy.unknownAnimation }
+      : {}),
+    ...(policy.unknownDimensions === 'fallback' ||
+    policy.unknownDimensions === 'reject'
+      ? { unknownDimensions: policy.unknownDimensions }
+      : {}),
+    ...(typeof policy.rejectTrailingData === 'boolean'
+      ? { rejectTrailingData: policy.rejectTrailingData }
+      : {}),
+    ...(typeof policy.requireCompleteContainer === 'boolean'
+      ? { requireCompleteContainer: policy.requireCompleteContainer }
+      : {}),
+  };
 }
 
 function inputPolicyFor<Output extends FileLike, Error>(
@@ -225,14 +280,39 @@ function inputPolicyFor<Output extends FileLike, Error>(
       ? config.browserInputPolicy
       : config.fallbackInputPolicy;
 
-  return {
+  const merged: ImagePolicy = {
     ...routeDefaults,
-    ...definedPolicy(config.inputPolicy),
-    ...definedPolicy(routePolicy),
-    // The server is the last tier; unknown dimensions always reject here
-    // regardless of the configured fallback behavior.
+    ...safePolicyOverride(config.inputPolicy),
+    ...safePolicyOverride(routePolicy),
+    // The server is the last tier; inconclusive structural policy routes
+    // reject rather than attempting another fallback.
+    unknownAnimation: 'reject',
     unknownDimensions: 'reject',
   };
+  return {
+    ...merged,
+    maxInputBytes: Math.min(
+      hardMaxInputBytes,
+      resolveImagePolicy(merged).maxInputBytes,
+    ),
+  };
+}
+
+function resolveSource(
+  source: ProcessServerImageOptions['source'],
+): import('./types.js').ServerImageSource {
+  return source === 'original-fallback'
+    ? 'original-fallback'
+    : 'browser-normalized';
+}
+
+function fullInspectionOptions(
+  file: FileLike,
+  maximumBytes: number,
+): { readonly maxHeaderBytes?: number } {
+  return Number.isSafeInteger(file.size) && file.size > 0 && file.size <= maximumBytes
+    ? { maxHeaderBytes: file.size }
+    : {};
 }
 
 function performanceNow(): number {

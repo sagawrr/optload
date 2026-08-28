@@ -2,6 +2,20 @@ import sharp from 'sharp';
 import type { OutputInfo, Sharp } from 'sharp';
 import type { ChildNormalizeRequest } from './protocol.js';
 
+// This process handles one image and nothing else, so a global loader allowlist
+// is safe here. File/URL/unfuzzed loaders remain unavailable even if libvips
+// happens to have been compiled with them.
+sharp.block({ operation: ['VipsForeignLoad'] });
+sharp.unblock({
+  operation: [
+    'VipsForeignLoadJpegBuffer',
+    'VipsForeignLoadPngBuffer',
+    'VipsForeignLoadWebpBuffer',
+    'VipsForeignLoadHeifBuffer',
+    'VipsForeignLoadRaw',
+  ],
+});
+
 /**
  * A failure sharp (or the header guard) can classify. Crosses the process
  * boundary as a plain code plus a truncated message.
@@ -27,6 +41,7 @@ export class TaskFailure extends Error {
  */
 export async function normalizeWithSharp(
   request: ChildNormalizeRequest,
+  expected: { readonly width: number; readonly height: number },
 ): Promise<Uint8Array> {
   const { output } = request;
 
@@ -38,12 +53,6 @@ export async function normalizeWithSharp(
       failOn: 'warning',
     })
       .rotate()
-      .resize({
-        width: output.maxWidth,
-        height: output.maxHeight,
-        fit: 'inside',
-        withoutEnlargement: true,
-      })
       .toColourspace('srgb')
       .raw()
       .toBuffer({ resolveWithObject: true });
@@ -54,9 +63,34 @@ export async function normalizeWithSharp(
     );
   }
 
+  const { width, height } = pixels.info;
+  if (
+    width <= 0 ||
+    height <= 0 ||
+    width > request.limits.maxDimension ||
+    height > request.limits.maxDimension ||
+    width * height > request.limits.maxPixels
+  ) {
+    throw new TaskFailure(
+      'DECODE_FAILED',
+      `The decoded image is ${width}x${height}, beyond the decode budget.`,
+    );
+  }
+  if (width !== expected.width || height !== expected.height) {
+    throw new TaskFailure(
+      'DECODE_FAILED',
+      `The decoded image is ${width}x${height}, but the header declared ${expected.width}x${expected.height}.`,
+    );
+  }
+
   try {
     const encoder = encodePixels(pixels, output);
     const encoded = await encoder.toBuffer();
+    if (encoded.length > output.maxOutputBytes) {
+      throw new Error(
+        `Encoded output exceeds the ${output.maxOutputBytes}-byte limit.`,
+      );
+    }
     return new Uint8Array(encoded);
   } catch (error) {
     throw new TaskFailure(
@@ -70,12 +104,18 @@ function encodePixels(
   pixels: { data: Buffer; info: OutputInfo },
   output: ChildNormalizeRequest['output'],
 ): Sharp {
+  const target = outputDimensions(pixels.info.width, pixels.info.height, output);
   const pipeline = sharp(pixels.data, {
     raw: {
       width: pixels.info.width,
       height: pixels.info.height,
       channels: pixels.info.channels,
     },
+  }).resize({
+    width: target.width,
+    height: target.height,
+    fit: 'inside',
+    withoutEnlargement: true,
   });
   const quality = percent(output.quality);
   switch (output.format) {
@@ -86,6 +126,35 @@ function encodePixels(
     case 'webp':
       return pipeline.webp({ quality });
   }
+}
+
+function outputDimensions(
+  width: number,
+  height: number,
+  output: ChildNormalizeRequest['output'],
+): { readonly width: number; readonly height: number } {
+  const scale = Math.min(
+    1,
+    output.maxWidth / width,
+    output.maxHeight / height,
+    Math.sqrt(output.maxOutputPixels / (width * height)),
+  );
+  let targetWidth = Math.max(1, Math.floor(width * scale));
+  let targetHeight = Math.max(1, Math.floor(height * scale));
+  if (targetWidth * targetHeight > output.maxOutputPixels) {
+    if (targetWidth >= targetHeight) {
+      targetWidth = Math.max(
+        1,
+        Math.floor(output.maxOutputPixels / targetHeight),
+      );
+    } else {
+      targetHeight = Math.max(
+        1,
+        Math.floor(output.maxOutputPixels / targetWidth),
+      );
+    }
+  }
+  return { width: targetWidth, height: targetHeight };
 }
 
 function percent(quality: number): number {

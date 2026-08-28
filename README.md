@@ -3,77 +3,43 @@
 [![CI](https://github.com/sagawrr/optload/actions/workflows/ci.yml/badge.svg)](https://github.com/sagawrr/optload/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-Effect-powered image intake with an idiomatic Promise API and a deliberate
-server fallback.
+Image intake for browsers and Node.js with Promise-first and Effect-native APIs.
+Optload identifies uploads from bytes, applies explicit policy, normalizes
+ordinary still images in a fresh browser worker by default, and routes
+unsupported work to a server normalizer.
 
-Optload treats an upload as untrusted bytes, not as whatever its extension or
-`File.type` claims. It inspects a bounded prefix, applies policy, chooses a
-processing route, normalizes supported images in a fresh worker, and makes the
-server path explicit when the browser cannot safely finish the job.
+## Security boundary
 
-> Production ready: the browser pipeline, server orchestration, and a
-> process-isolated sharp decoder adapter are end to end and
-> security-hardened — bounded header inspection with defensive read limits,
-> post-decode dimension verification, per-route server policies, deadlines
-> covering every pipeline stage, and a cross-browser matrix generated from
-> real Playwright runs. See [SECURITY.md](./SECURITY.md) for the trust model
-> and the remaining deployment obligations.
+Browser output is untrusted input. Client-side normalization improves latency,
+bandwidth, and privacy, but the receiving server must still enforce request
+limits, re-inspect the bytes, decode outside the application process, re-encode,
+and verify the result before storage.
 
-## Why hybrid
+The default flow is:
 
-The browser should do the work that improves UX and reduces transfer size. The
-server must remain the authority that decides what gets stored or served.
+1. Inspect a bounded prefix without trusting the filename or `File.type`.
+2. Reject policy violations before browser decode.
+3. Decode, dimension-check, resize, and re-encode in a one-image worker.
+4. Invoke the configured fallback when the browser lacks a codec, encoder, or
+   isolated-worker capability, or when local processing fails.
+5. Re-inspect accepted server input, normalize it across a declared
+   process/container/service boundary, and structurally inspect the output.
 
-1. Inspect magic bytes and dimensions without trusting MIME or extension.
-2. Reject obvious policy violations before invoking a decoder.
-3. Resize and re-encode ordinary still images in a one-image, one-lifetime worker.
-4. Upload the smaller normalized blob.
-5. Route missing codecs, unknown dimensions, and local failures to an explicit
-   server handler.
-6. Re-inspect and decode under server-side resource limits before accepting the
-   result. Browser output is still attacker-controlled input.
-
-Every file resolves to exactly one of three routes:
-
-| Route | When | Result |
-| --- | --- | --- |
-| **local** | The browser can provably decode *and* encode the format, and policy accepts it | A re-encoded blob from a fresh worker; metadata and appended bytes do not survive |
-| **fallback** | Missing codecs (HEIC on most browsers), unknown dimensions, or any local failure | Your handler receives the file, the inspection, and the reason; the server re-verifies everything |
-| **reject** | Active content disguised as an image, bomb dimensions, unwanted animation, trailing data | A typed error before any decoder runs |
+`local` and `fallback` are successful results. `reject` is a typed failure; a
+rejected file is never sent automatically to the broader fallback endpoint.
 
 ## Packages
 
-- `@optload/core` — bounded header inspection, policy, and tagged Effect errors.
-- `@optload/browser` — Promise-first capability planning, worker processing,
-  and whole-page file-drop handling; `/effect` exposes the native Effect API.
-- `@optload/server` — independent re-inspection, isolated-normalizer
-  orchestration, deadlines, and output verification, with Promise and Effect
-  entry points.
-- `@optload/sharp-normalizer` — the reference server decoder adapter: one
-  forked sharp/libvips process per image, header re-checks, raw-pixel
-  boundary, metadata and ICC stripping, sRGB-pinned output, and decode
-  probes that prove codec capability instead of trusting format tables.
-- `@optload/playground` — runnable Vite example demonstrating every scenario:
-  the local worker route, the server fallback route, active-content rejection,
-  mid-flight cancellation, and inspection warnings for mismatched files.
-  `pnpm dev` serves it; its [goal page](./examples/playground/goal.html)
-  states the threat model in three paragraphs.
+- `@optload/core` — byte-based header inspection, policy, and tagged errors.
+- `@optload/browser` — browser planning, worker normalization, drop handling,
+  Promise API, and `/effect` entry point.
+- `@optload/server` — route-specific server policy, deadlines, normalizer
+  orchestration, and output re-inspection.
+- `@optload/sharp-normalizer` — reference Sharp/libvips adapter using one child
+  process per image and an explicit buffer-loader allowlist.
+- `@optload/playground` — local processing and simulated fallback/rejection UI.
 
-Effect is pinned to the latest stable 3.x release rather than the 4.x release
-candidate. It powers cancellation, typed failures, resource cleanup, and
-timeouts internally without requiring every application to adopt Effect.
-
-## One engine, your API style
-
-The default packages expose ordinary TypeScript values, async callbacks, and
-Promises. Consumers do not import Effect or return Effects from callbacks.
-
-Effect users opt into `@optload/browser/effect` or `@optload/server/effect`.
-Those entry points use the same factory and method names, but preserve the typed
-Effect error channel for composition. There is one implementation, not separate
-Promise and Effect pipelines.
-
-## Quick start
+## Browser usage
 
 ```sh
 pnpm add @optload/browser
@@ -109,11 +75,7 @@ const images = createImageIntake({
     return response.json() as Promise<{ imageId: string }>
   },
 })
-```
 
-Promise callers get cancellation directly on the obvious method:
-
-```ts
 const result = await images.process(file, {
   signal: abortController.signal,
   onProgress: ({ stage, progress }) => updateUi(stage, progress),
@@ -126,44 +88,28 @@ if (result.kind === "local") {
 }
 ```
 
-Effect callers retain the typed error channel by changing only the import:
+`execution: "auto"` (the default) and `execution: "worker"` require a module
+worker with `OffscreenCanvas`. They route to fallback when isolation is
+unavailable; they do not silently decode on the UI thread. Set
+`execution: "main-thread"` only as an explicit compatibility choice.
 
-```sh
-pnpm add @optload/browser effect
-```
-
-```ts
-import { createImageIntake } from "@optload/browser/effect"
-import { Effect } from "effect"
-
-const images = createImageIntake({
-  output: { format: "webp", maxWidth: 2048, maxHeight: 2048 },
-  fallback: ({ file }) => uploadOriginalEffect(file),
-})
-
-const program = images.process(file).pipe(
-  Effect.tap((result) => Effect.logInfo(result.kind)),
-)
-```
-
-Handle file drops anywhere without hijacking ordinary text/link drags:
+Drop handling has a default cap of 20 files per drop and can be lowered:
 
 ```ts
 const detach = images.attachDropTarget(window, {
-  onActiveChange: (active) => showDropOverlay(active),
+  maxFiles: 5,
   onResult: (result, file) => showResult(result, file),
   onError: (error, file) => showError(error, file),
 })
 
-// Call when the view unmounts.
+// Call on unmount.
 detach()
 ```
 
-`execution: "auto"` and `execution: "worker"` require an isolated module
-worker. They never silently downgrade to UI-thread decoding. Use
-`execution: "main-thread"` only as an explicit compatibility tradeoff.
+Effect users install `effect` and import the same factory name from
+`@optload/browser/effect`; callbacks and failures remain in the Effect channel.
 
-On the server, re-inspect, decode, and re-encode in an isolated process:
+## Server usage
 
 ```sh
 pnpm add @optload/server @optload/sharp-normalizer
@@ -173,11 +119,9 @@ pnpm add @optload/server @optload/sharp-normalizer
 import { createServerImageIntake } from "@optload/server"
 import { createSharpNormalizer, probeDecoders } from "@optload/sharp-normalizer"
 
-// Prove codec capability once at boot — the format table is not a codec
-// claim (prebuilt libvips decodes AV1, not HEVC).
-const decoders = await probeDecoders()
-if (!decoders.heic) {
-  // Route .heic uploads elsewhere, or reject them, before they reach intake.
+const codecs = await probeDecoders()
+if (!codecs.heic) {
+  // Reject HEVC-backed HEIC/HEIF or route it to a compatible service.
 }
 
 const intake = createServerImageIntake({
@@ -185,60 +129,66 @@ const intake = createServerImageIntake({
   output: { format: "webp", maxWidth: 2048, maxHeight: 2048 },
 })
 
-const result = await intake.process(upload)
-// result.output is re-encoded from decoded pixels: no source metadata,
-// profiles, or appended bytes survive; the server verified it twice.
+const result = await intake.process(upload, {
+  source: "original-fallback",
+  signal: request.signal,
+})
 ```
 
-## Defaults that are intentional
+The supplied `FileLike.size` must be the real stream length. Request-body
+limits must run before constructing a `FileLike`; the library cannot recover
+bytes that an upstream wrapper hides or safely buffer an unbounded stream.
 
-- JPEG, PNG, WebP, AVIF, HEIC, and HEIF are recognized input formats.
-- SVG, unknown formats, oversize files, decompression-bomb dimensions, and
-  animation are rejected by default.
-- Default intake limits are 32 MB, 33.5 MP, and 8,192 px per side; the decoded
-  bitmap is re-verified against the pixel and dimension limits after decode,
-  because a header can understate the real frame size.
-- A JPEG declaring several conflicting frame sizes in the inspected prefix is
-  judged by the largest and reported as `inconsistent_dimensions`.
-- Bytes past a container's end marker (PNG IEND, JPEG EOI, the declared WebP
-  RIFF extent) are reported as `trailing_data`; local re-encoding drops them,
-  and both server routes reject them by default.
-- EXIF, XMP, ICC, and text metadata are reported as `metadata_present`;
-  re-encoded output never carries them forward, but a server fallback that
-  stores the original file does.
-- Unknown dimensions, unavailable native codecs, and output formats the engine
-  cannot encode require server fallback.
-- Only a bounded file prefix is read during preflight.
-- One fresh worker processes one image and is then terminated.
-- Output is a newly encoded JPEG, PNG, or WebP blob; source metadata is not copied.
-- Drop targets accept an optional `maxFiles` cap so one adversarial drop cannot
-  enqueue unbounded decoder work.
+## Defaults
 
-See [SECURITY.md](./SECURITY.md) for the trust model and server obligations,
-[docs/browser-matrix.md](./docs/browser-matrix.md) for verified per-engine
-behavior (regenerate with `pnpm test:browsers`), and
-[docs/security-research.md](./docs/security-research.md) for the incident
-research behind every rule.
+| Route | Formats | Max bytes | Max pixels | Max side | Unknown dimensions |
+| --- | --- | ---: | ---: | ---: | --- |
+| Browser | JPEG, PNG, WebP, AVIF, HEIC, HEIF | 32 MiB | 33,554,432 | 8,192 | fallback |
+| Server: browser-normalized | JPEG, PNG, WebP | 16 MiB | 16,777,216 | 4,096 | reject |
+| Server: original-fallback | all six inputs | 32 MiB | 33,554,432 | 8,192 | reject |
 
-## Roadmap
+Detected animation and SVG are rejected by default. Inconclusive animation or
+frame state routes to fallback in the browser and rejects at the server.
+Browser outputs are JPEG, PNG, or WebP. The reference server output is lossy
+WebP unless configured otherwise. Server input policy has a non-overridable
+64 MiB ceiling so accepted input can receive a complete structural walk.
 
-MediaBunny is the leading candidate for a future video/audio package
-(container parsing, demuxing, WebCodecs, remuxing); it would sit beside this
-pipeline, not replace its policy, isolation, or server verification.
+## Limits of the guarantee
 
-## Develop
+- Header inspection is a bounded preflight, not proof that a container or
+  decoder is bug-free.
+- A browser worker limits lifetime and state sharing; it is not a stronger
+  sandbox than the browser.
+- A forked decoder child is crash/hang isolation, not an OS resource sandbox.
+  Containerize the service when hostile uploads require memory, CPU, filesystem,
+  syscall, or egress controls.
+- Re-encoding removes source container structure and detected metadata but does
+  not provide malware scanning, content moderation, or reliable steganography
+  detection.
+- URL fetching is intentionally out of scope.
+
+See [SECURITY.md](./SECURITY.md) for deployment obligations and vulnerability
+reporting, [security evidence](./docs/security-research.md) for the primary
+advisories behind the controls, and the checked-in
+[browser matrix](./docs/browser-matrix.md) for the latest recorded Playwright
+run. CI uploads a newly generated matrix as an artifact without granting pull
+requests repository write access.
+
+## Development
 
 ```sh
-pnpm install
-pnpm test             # unit, security-repro, fuzz, and process-isolation suites
-pnpm test:browsers    # regenerate docs/browser-matrix.md from real engine runs
-pnpm typecheck
+pnpm install --frozen-lockfile
+pnpm audit:prod
 pnpm lint
+pnpm typecheck
+pnpm test
 pnpm build
-pnpm sbom:all           # emit sbom.cyclonedx.json (incl. native codec binaries)
-pnpm dev                # serve the playground at localhost
+pnpm sbom:all
+pnpm test:browsers
+pnpm dev
 ```
 
-`pnpm lint` runs oxlint with complexity ceilings (cyclomatic complexity ≤ 15,
-depth/params/nesting caps), security rules (no `eval`-adjacent constructs,
-prototype pollution vectors), and every enabled rule at error severity.
+Runtime dependencies are pinned where they cross a decoder boundary. CI uses
+read-only permissions for pull requests, immutable action commits, a production
+audit gate, strict TypeScript, deterministic security/fuzz regressions, package
+builds, and CycloneDX SBOM artifacts.

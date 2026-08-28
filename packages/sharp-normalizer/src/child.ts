@@ -2,6 +2,8 @@ import { inspectImageBytes } from '@optload/core';
 import type { ChildFailure, ChildFailureCode, ChildNormalizeRequest } from './protocol.js';
 import { TaskFailure, normalizeWithSharp } from './sharp-task.js';
 
+const allowedFormats = new Set(['jpeg', 'png', 'webp', 'avif', 'heic', 'heif']);
+
 const child = process as unknown as {
   send?(message: unknown): void;
   on(event: 'message', listener: (message: ChildNormalizeRequest) => void): void;
@@ -33,7 +35,7 @@ async function guardedNormalize(
   const inspection = inspectImageBytes(request.bytes, {
     fileSize: request.bytes.length,
   });
-  if (inspection.format === null) {
+  if (inspection.format === null || !allowedFormats.has(inspection.format)) {
     throw new TaskFailure(
       'UNSUPPORTED_FORMAT',
       'The bytes were not identified as any supported image format.',
@@ -62,7 +64,11 @@ async function guardedNormalize(
       `The image declares ${width}x${height}, beyond the decode budget.`,
     );
   }
-  return normalizeWithSharp(request);
+  const expected =
+    inspection.orientation !== null && inspection.orientation >= 5
+      ? { width: height, height: width }
+      : { width, height };
+  return normalizeWithSharp(request, expected);
 }
 
 function toFailure(error: unknown): ChildFailure {

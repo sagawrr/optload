@@ -43,6 +43,7 @@ interface ExecutedLocalResult extends LocalProcessorResult {
 }
 
 const defaultTimeoutMs = 15_000;
+const maximumTimeoutMs = 120_000;
 
 const inspectFile = (file: File) => inspectImage(file);
 
@@ -186,6 +187,24 @@ function makePlan<FallbackValue, FallbackError>(
             feature: `native ${inspection.mediaType ?? 'image'} decoding`,
           })
         : null;
+    const execution = resolvedExecution(config.execution);
+    const workerUnsupported =
+      execution !== 'main-thread' && !canUseFreshWorker()
+        ? new EnvironmentUnsupportedError({ feature: 'isolated module workers' })
+        : null;
+    const localUnsupported = unsupported ?? workerUnsupported;
+
+    if (localUnsupported) {
+      return {
+        inspection,
+        policy,
+        route: 'fallback',
+        nativeDecode: capability,
+        target,
+        output,
+        reason: localUnsupported,
+      };
+    }
 
     // Decode support alone is not a verdict: WebKit decodes WebP but cannot
     // encode it from canvas. An unencodable output format routes to the
@@ -194,13 +213,13 @@ function makePlan<FallbackValue, FallbackError>(
       encode(output.format).catch(() => false),
     );
     const encodeUnsupported =
-      !encodable && !unsupported
+      !encodable
         ? new EnvironmentUnsupportedError({
             feature: `native ${output.format} encoding`,
           })
         : null;
 
-    const reason = unsupported ?? encodeUnsupported;
+    const reason = encodeUnsupported;
     return {
       inspection,
       policy,
@@ -265,7 +284,7 @@ function runFallback<FallbackValue, FallbackError>(
     context.onProgress,
     'fallback',
     0.3,
-    'Using secure server fallback…',
+    'Using configured server fallback…',
   ).pipe(
     Effect.zipRight(context.config.fallback(request)),
     Effect.map(
@@ -305,7 +324,7 @@ function runLocalAttempt<FallbackValue, FallbackError>(
   const timeoutMs = validTimeout(context.config.timeoutMs);
   const local = executeLocally(
     request,
-    context.config.execution ?? 'auto',
+    resolvedExecution(context.config.execution),
     context.onProgress,
   ).pipe(
     Effect.timeoutFail({
@@ -368,9 +387,15 @@ function combineProgressHandlers(
 }
 
 function validTimeout(value: number | undefined): number {
-  return value && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? Math.min(maximumTimeoutMs, value)
     : defaultTimeoutMs;
+}
+
+function resolvedExecution(
+  value: EffectImageIntakeOptions<unknown, unknown>['execution'],
+): 'auto' | 'worker' | 'main-thread' {
+  return value === 'worker' || value === 'main-thread' ? value : 'auto';
 }
 
 function performanceNow(): number {

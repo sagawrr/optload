@@ -32,6 +32,26 @@ describe('image policy', () => {
     expect(policy.maxSourceDimension).toBeLessThanOrEqual(8_192);
   });
 
+  it('fails closed on non-finite and malformed runtime configuration', () => {
+    const policy = resolveImagePolicy({
+      allowedFormats: ['jpeg', 'not-a-format' as 'png'],
+      maxInputBytes: Number.POSITIVE_INFINITY,
+      maxSourcePixels: Number.NaN,
+      maxSourceDimension: -1,
+      maxFrames: 1.5,
+      unknownAnimation: 'allow' as 'reject',
+      unknownDimensions: 'allow' as 'reject',
+    });
+
+    expect(policy.allowedFormats).toEqual(['jpeg']);
+    expect(policy.maxInputBytes).toBe(32 * 1024 * 1024);
+    expect(policy.maxSourcePixels).toBe(33_554_432);
+    expect(policy.maxSourceDimension).toBe(8_192);
+    expect(policy.maxFrames).toBe(1);
+    expect(policy.unknownAnimation).toBe('fallback');
+    expect(policy.unknownDimensions).toBe('fallback');
+  });
+
   it('rejects a truthful 10,000×10,000 header under the default policy', () => {
     const decision = checkImagePolicy(
       inspection({ width: 10_000, height: 10_000, pixels: 100_000_000 }),
@@ -50,6 +70,17 @@ describe('image policy', () => {
     expect(decision.issues[0]?.code).toBe('DIMENSIONS_UNKNOWN');
   });
 
+  it('routes unknown animation state to fallback, or rejects it on authority tiers', () => {
+    const unknown = inspection({ animated: null, frameCount: null });
+    const fallback = checkImagePolicy(unknown);
+    const rejected = checkImagePolicy(unknown, { unknownAnimation: 'reject' });
+
+    expect(fallback.outcome).toBe('fallback');
+    expect(fallback.issues[0]?.code).toBe('ANIMATION_UNKNOWN');
+    expect(rejected.outcome).toBe('reject');
+    expect(rejected.issues[0]?.code).toBe('ANIMATION_UNKNOWN');
+  });
+
   it('rejects zero or numerically unsafe dimensions', () => {
     const zero = checkImagePolicy(
       inspection({ width: 0, height: 800, pixels: 0 }),
@@ -64,6 +95,15 @@ describe('image policy', () => {
 
     expect(zero.issues[0]?.code).toBe('INVALID_DIMENSIONS');
     expect(unsafe.issues[0]?.code).toBe('INVALID_DIMENSIONS');
+  });
+
+  it('can require a provably complete JPEG, PNG, or WebP container', () => {
+    const decision = checkImagePolicy(inspection(), {
+      requireCompleteContainer: true,
+    });
+
+    expect(decision.outcome).toBe('reject');
+    expect(decision.issues[0]?.code).toBe('CONTAINER_INCOMPLETE');
   });
 
   it.effect('fails with a tagged Effect error', () =>

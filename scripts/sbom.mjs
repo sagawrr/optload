@@ -22,15 +22,27 @@ const components = new Map();
 function addComponent(name, version, license) {
   const key = `${name}@${version}`;
   if (components.has(key)) return;
+  const packageUrl = npmPurl(name, version);
   const component = {
     type: 'library',
-    'bom-ref': `pkg:npm/${name}@${version}`,
+    'bom-ref': packageUrl,
     name,
     version,
-    purl: `pkg:npm/${encodeURIComponent(name).replace('%40', '@')}@${version}`,
+    purl: packageUrl,
   };
-  if (license) component.licenses = [{ license: { id: license } }];
+  if (license) component.licenses = [{ expression: license }];
   components.set(key, component);
+}
+
+function npmPurl(name, version) {
+  const encodedVersion = encodeURIComponent(version);
+  if (!name.startsWith('@')) {
+    return `pkg:npm/${encodeURIComponent(name)}@${encodedVersion}`;
+  }
+  const separator = name.indexOf('/');
+  const namespace = name.slice(1, separator);
+  const packageName = name.slice(separator + 1);
+  return `pkg:npm/%40${encodeURIComponent(namespace)}/${encodeURIComponent(packageName)}@${encodedVersion}`;
 }
 
 for (const base of ['packages', 'examples']) {
@@ -45,14 +57,42 @@ for (const base of ['packages', 'examples']) {
   }
 }
 
-/** Reads a component's license claim; absent or unreadable yields undefined. */
-function licenseOf(manifestPath) {
+/** Reads one installed package manifest; absent or unreadable yields undefined. */
+function packageAt(manifestPath) {
   if (!existsSync(manifestPath)) return undefined;
   try {
-    const parsed = JSON.parse(readFileSync(manifestPath, 'utf8')).license;
-    return typeof parsed === 'string' ? parsed : undefined;
+    const parsed = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    return typeof parsed.name === 'string' && typeof parsed.version === 'string'
+      ? parsed
+      : undefined;
   } catch {
     return undefined;
+  }
+}
+
+function addManifest(manifestPath) {
+  const pkg = packageAt(manifestPath);
+  if (!pkg) return;
+  addComponent(
+    pkg.name,
+    pkg.version,
+    typeof pkg.license === 'string' ? pkg.license : undefined,
+  );
+}
+
+function addInstalledPackages(modules) {
+  for (const child of readdirSync(modules, { withFileTypes: true })) {
+    if (!child.isDirectory()) continue;
+    if (!child.name.startsWith('@')) {
+      addManifest(join(modules, child.name, 'package.json'));
+      continue;
+    }
+    const scope = join(modules, child.name);
+    for (const scoped of readdirSync(scope, { withFileTypes: true })) {
+      if (scoped.isDirectory()) {
+        addManifest(join(scope, scoped.name, 'package.json'));
+      }
+    }
   }
 }
 
@@ -60,17 +100,9 @@ const store = 'node_modules/.pnpm';
 if (existsSync(store)) {
   for (const entry of readdirSync(store)) {
     if (entry.startsWith('.')) continue;
-    const at = entry.lastIndexOf('@');
-    if (at <= 0) continue;
-    // Scoped packages encode the separator as '+' (`@img+sharp-libvips@1.3.3`);
-    // peer-suffixed entries carry `_peer` tails after the version.
-    const rawName = entry.slice(0, at);
-    const name = rawName.startsWith('@') ? rawName.replace('+', '/') : rawName;
-    const version = entry.slice(at + 1).split('_')[0];
-    if (!/^\d/.test(version)) continue;
-
-    const license = licenseOf(join(store, entry, 'node_modules', name, 'package.json'));
-    addComponent(name, version, license);
+    const modules = join(store, entry, 'node_modules');
+    if (!existsSync(modules)) continue;
+    addInstalledPackages(modules);
   }
 }
 
@@ -80,7 +112,11 @@ const list = [...components.values()].toSorted((a, b) =>
     : a.name.localeCompare(b.name),
 );
 const malformed = list.filter(
-  (c) => !c.name || !/^\d/.test(c.version),
+  (component) =>
+    !component.name ||
+    !/^\d/.test(component.version) ||
+    component['bom-ref'] !== component.purl ||
+    (component.name.startsWith('@') && !component.purl.startsWith('pkg:npm/%40')),
 );
 if (malformed.length > 0) {
   console.error(`sbom: refusing to emit, ${malformed.length} malformed components`);
@@ -97,7 +133,8 @@ const bom = {
       type: 'application',
       name: root.name,
       version: root.version,
-      'bom-ref': `pkg:npm/${root.name}@${root.version}`,
+      'bom-ref': npmPurl(root.name, root.version),
+      purl: npmPurl(root.name, root.version),
     },
   },
   components: list,

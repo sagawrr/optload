@@ -139,8 +139,8 @@ export interface DropTargetOptions<FallbackValue> {
   /**
    * Cap on files processed from a single drop. Every accepted file runs a
    * fresh decoding worker, so an unbounded drop is a client-side
-   * resource-exhaustion vector. Unlimited by default to preserve existing
-   * behavior; set it to what the surrounding UI can actually present.
+   * resource-exhaustion vector. Defaults to 20; lower it to what the
+   * surrounding UI can actually present.
    */
   readonly maxFiles?: number;
   readonly onActiveChange?: (active: boolean) => void;

@@ -30,6 +30,10 @@
     "effect": "3.22.1"
   },
   "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/sagawrr/optload.git",

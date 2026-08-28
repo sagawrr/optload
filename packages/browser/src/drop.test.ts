@@ -86,6 +86,35 @@ describe('whole-page file drops', () => {
     expect(processed).toEqual(['flood-1.jpg', 'flood-2.jpg']);
     detach();
   });
+
+  it('applies a safe file cap when maxFiles is omitted', async () => {
+    const target = new EventTarget() as unknown as HTMLElement;
+    const processed: string[] = [];
+    let drained: (() => void) | undefined;
+    const done = new Promise<void>((resolve) => {
+      drained = resolve;
+    });
+    const intake = {
+      process: async (file: File) => {
+        processed.push(file.name);
+        if (processed.length === 20) drained?.();
+        return { kind: 'fallback' } as ImageResult<never>;
+      },
+    } as ImageIntake;
+
+    const detach = attachDropTarget(intake, target, {
+      onResult: () => undefined,
+    });
+    const flood = Array.from(
+      { length: 25 },
+      (_, index) => new File(['image'], `flood-${index + 1}.jpg`),
+    );
+    target.dispatchEvent(dragEvent('drop', flood));
+
+    await done;
+    expect(processed).toHaveLength(20);
+    detach();
+  });
 });
 
 function dragEvent(

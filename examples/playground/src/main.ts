@@ -81,7 +81,7 @@ intake.attachDropTarget(window, {
 });
 
 async function processFiles(files: readonly File[]): Promise<void> {
-  for (const file of files) {
+  for (const file of files.slice(0, 20)) {
     resetOutput();
     activeController = new AbortController();
     cancel.hidden = false;
@@ -113,7 +113,7 @@ function renderResult(
   if (processed.kind === 'fallback') {
     revokePreview();
     preview.removeAttribute('src');
-    route.textContent = 'Secure server fallback';
+    route.textContent = 'Server fallback required';
     outputInfo.textContent = processed.value.format?.toUpperCase() ?? 'Unknown format';
     savedInfo.textContent = 'Awaiting server';
     timeInfo.textContent = processed.value.reason;
