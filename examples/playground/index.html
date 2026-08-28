@@ -4,102 +4,85 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
-    <meta
-      name="description"
-      content="Optload browser image normalization playground"
-    />
-    <title>Optload playground</title>
+    <meta name="description" content="Optload is a safer, smaller image intake stack for browsers and Node.js." />
+    <title>Optload — safer images, smaller uploads</title>
   </head>
-  <body>
+  <body class="home-page">
+    <a class="skip-link" href="#playground">Skip to playground</a>
     <div id="app">
-      <header>
-        <a class="brand" href="/" aria-label="Optload home">
-          <span class="brand-mark">O</span>
-          <span>optload</span>
-        </a>
-        <nav class="site-nav">
-          <a class="nav-link" href="/goal.html">The goal</a>
-          <span class="badge">Effect-powered</span>
+      <header class="site-header">
+        <a class="brand" href="/" aria-label="Optload home"><span class="brand-mark">O</span><span>optload</span></a>
+        <nav class="site-nav" aria-label="Primary navigation">
+          <a class="nav-link" href="/library.html">Library</a>
+          <a class="nav-link" href="/goal.html">Security</a>
+          <a class="nav-link" href="https://github.com/sagawrr/optload" target="_blank" rel="noreferrer">GitHub <i class="ph ph-arrow-up-right" aria-hidden="true"></i></a>
+          <a class="nav-cta" href="#playground">Open playground <i class="ph ph-arrow-down" aria-hidden="true"></i></a>
         </nav>
       </header>
 
       <main>
-        <section class="intro" aria-labelledby="title">
-          <p class="eyebrow">Image intake without excuses</p>
-          <h1 id="title">Drop the photo.<br /><em>We handle the format.</em></h1>
-          <p class="lede">
-            Inspect, resize, normalize, and encode locally. Unsupported inputs
-            take an explicit server-fallback path.
-          </p>
-        </section>
-
-        <section class="workspace" aria-label="Image optimizer">
-          <div class="drop-zone">
-            <input
-              id="file-input"
-              type="file"
-              accept="image/*,.heic,.heif,.avif"
-              multiple
-              hidden
-            />
-            <span class="drop-icon" aria-hidden="true">↘</span>
-            <button id="choose-files" class="choose-button" type="button">
-              Choose photos
-            </button>
-            <span>or drop them anywhere on this page</span>
-            <div class="sample-actions">
-              <button id="try-sample" class="sample-button" type="button">
-                Try local route
-              </button>
-              <button id="try-fallback" class="sample-button" type="button">
-                Try fallback route
-              </button>
-              <button id="try-reject" class="sample-button" type="button">
-                Try rejection
-              </button>
+        <section class="hero" id="playground" aria-labelledby="hero-title">
+          <div class="hero-copy">
+            <p class="eyebrow">Open-source image intake</p>
+            <h1 id="hero-title">Safer images.<br /><em>Smaller uploads.</em></h1>
+            <p class="lede">Normalize untrusted images before they slow you down. Optload inspects the bytes, does the fast work in a fresh browser worker, and makes every fallback explicit.</p>
+            <div class="hero-actions">
+              <input id="file-input" type="file" accept="image/*,.heic,.heif,.avif" hidden />
+              <button id="choose-files" class="button button-primary" type="button"><i class="ph ph-upload-simple" aria-hidden="true"></i>Try the playground</button>
+              <a class="button button-secondary" href="https://github.com/sagawrr/optload" target="_blank" rel="noreferrer"><i class="ph ph-github-logo" aria-hidden="true"></i>View on GitHub</a>
             </div>
-            <small>JPEG · PNG · WebP · AVIF · HEIC/HEIF</small>
+            <button class="install-command" id="copy-install" type="button" data-copy="pnpm add @optload/browser"><span><i class="ph ph-terminal-window" aria-hidden="true"></i> pnpm add @optload/browser</span><i class="ph ph-copy" aria-hidden="true"></i><span class="sr-only" id="copy-status" aria-live="polite">Copy install command</span></button>
+            <p class="hero-note"><span class="note-dot"></span>MIT licensed · Effect-powered · Built for hostile bytes</p>
           </div>
 
-          <div id="status" class="status" hidden aria-live="polite">
-            <div class="status-row">
-              <span id="status-message">Inspecting…</span>
-              <span id="status-percent">0%</span>
-              <button id="cancel" class="cancel-button" type="button" hidden>
-                Cancel
-              </button>
+          <div class="product-shell" aria-label="Optload image playground">
+            <div class="product-header"><div><span class="product-kicker">Live playground</span><span class="product-title">Before / after, in your browser</span></div><button class="quiet-button" id="reset-sample" type="button">Reset sample</button></div>
+            <div class="comparison" id="comparison" style="--split: 50%;">
+              <img class="comparison-image original-image" id="original-preview" src="/sample-mountain.jpg" alt="Original mountain lake upload" />
+              <div class="optimized-layer" id="optimized-layer"><img class="comparison-image optimized-image" id="optimized-preview" src="/sample-mountain.jpg" alt="Optimized mountain lake upload" /></div>
+              <div class="comparison-label comparison-label-original">Original</div><div class="comparison-label comparison-label-optimized">Optimized</div>
+              <div class="slider-rule" aria-hidden="true"></div><div class="slider-handle" aria-hidden="true"><i class="ph ph-arrows-left-right"></i></div>
+              <input class="comparison-slider" id="comparison-slider" type="range" min="0" max="100" value="50" aria-label="Before and after position" />
+              <div class="stage-message" id="stage-message" hidden><i class="ph ph-image-square" aria-hidden="true"></i><strong>Drop an image to compare</strong><span>or choose a file from your machine</span></div>
             </div>
-            <div class="progress-track" aria-hidden="true">
-              <div id="progress-bar" class="progress-bar"></div>
+            <div class="product-progress" id="status" hidden aria-live="polite"><div class="status-row"><span id="status-message">Inspecting…</span><span id="status-percent">0%</span><button class="quiet-button" id="cancel" type="button" hidden>Cancel</button></div><div class="progress-track" aria-hidden="true"><div id="progress-bar" class="progress-bar"></div></div></div>
+            <div class="result-bar" id="result" aria-live="polite">
+              <div class="result-file"><span class="file-name" id="file-name">mountain-sample.jpg</span><span class="file-route" id="route"><span class="route-dot route-dot-local"></span>Processed locally</span></div>
+              <div class="result-stat"><span>Saved</span><strong id="saved-info">—</strong></div><div class="result-stat"><span>Dimensions</span><strong id="output-info">—</strong></div><div class="result-stat result-stat-time"><span>Time</span><strong id="time-info">—</strong></div>
+              <a class="download-button" id="download-output" href="#" aria-disabled="true" tabindex="-1"><i class="ph ph-download-simple" aria-hidden="true"></i>Download WebP</a>
             </div>
+            <div class="playground-controls"><span class="controls-label">Try a route</span><button class="route-button route-button-active" id="try-sample" type="button">Local worker</button><button class="route-button" id="try-fallback" type="button">Server fallback</button><button class="route-button" id="try-reject" type="button">Reject a file</button><span class="controls-format">JPEG · PNG · WebP · AVIF · HEIC/HEIF</span></div>
+            <p class="product-error" id="error" hidden role="alert"></p><p class="product-input"><i class="ph ph-shield-check" aria-hidden="true"></i>Files are inspected from bytes. Nothing is uploaded by this demo.</p>
           </div>
-
-          <article id="result" class="result" hidden>
-            <div class="preview-wrap">
-              <img id="preview" alt="Optimized upload preview" />
-            </div>
-            <div class="result-copy">
-              <p id="route" class="eyebrow"></p>
-              <h2 id="file-name"></h2>
-              <ul id="warnings" class="warnings" hidden></ul>
-              <dl>
-                <div><dt>Input</dt><dd id="input-info"></dd></div>
-                <div><dt>Output</dt><dd id="output-info"></dd></div>
-                <div><dt>Saved</dt><dd id="saved-info"></dd></div>
-                <div><dt>Time</dt><dd id="time-info"></dd></div>
-              </dl>
-            </div>
-          </article>
-
-          <p id="error" class="error" hidden role="alert"></p>
         </section>
+
+        <section class="section library-section" id="library" aria-labelledby="library-title"><div class="section-heading"><div><p class="eyebrow">The library</p><h2 id="library-title">The image intake stack.</h2></div><a class="text-link" href="/library.html">Explore all packages <i class="ph ph-arrow-up-right" aria-hidden="true"></i></a></div><p class="section-lede">Four focused packages. One explicit path from hostile bytes to a verified output.</p>
+          <div class="package-pipeline">
+            <article class="package-item"><i class="ph ph-radar package-icon" aria-hidden="true"></i><p class="package-index">01 · inspect</p><h3>@optload/core</h3><p>Byte-level detection, policy, and tagged errors. Runtime-agnostic and deliberately boring.</p></article>
+            <article class="package-item"><i class="ph ph-browser package-icon" aria-hidden="true"></i><p class="package-index">02 · transform</p><h3>@optload/browser</h3><p>Fast, isolated normalization in a fresh worker. Promise-first with an Effect-native entry point.</p></article>
+            <article class="package-item"><i class="ph ph-git-branch package-icon" aria-hidden="true"></i><p class="package-index">03 · route</p><h3>@optload/server</h3><p>Explicit fallback orchestration for unsupported formats, deadlines, and output re-inspection.</p></article>
+            <article class="package-item"><i class="ph ph-stack package-icon" aria-hidden="true"></i><p class="package-index">04 · normalize</p><h3>@optload/sharp-normalizer</h3><p>Process-isolated Sharp/libvips adapter for reliable server-side decode and encode.</p></article>
+          </div>
+        </section>
+
+        <section class="section code-section" aria-labelledby="code-title"><div class="code-copy"><p class="eyebrow">Developer first, by default</p><h2 id="code-title">One intake.<br /><em>Four precise outcomes.</em></h2><p class="section-lede">The API stays small while the trust boundary stays visible. Choose a policy, process a file, and handle the result your way.</p><a class="text-link" href="/library.html">Read the package docs <i class="ph ph-arrow-up-right" aria-hidden="true"></i></a></div><div class="code-panel"><div class="code-panel-top"><span><i class="ph ph-terminal-window" aria-hidden="true"></i>TypeScript</span><button class="icon-button" data-copy="pnpm add @optload/browser" aria-label="Copy install command"><i class="ph ph-copy" aria-hidden="true"></i></button></div><pre><code><span class="code-key">import</span> { createImageIntake } <span class="code-key">from</span> <span class="code-string">'@optload/browser'</span>
+
+<span class="code-key">const</span> intake = createImageIntake({
+  output: { format: <span class="code-string">'webp'</span>, maxWidth: <span class="code-number">2048</span> },
+  fallback: <span class="code-key">async</span> ({ file, reason }) =&gt; uploadToServer(file, reason),
+})
+
+<span class="code-key">const</span> result = <span class="code-key">await</span> intake.process(file)
+<span class="code-comment">// local | fallback | reject</span></code></pre></div></section>
+
+        <section class="section outcomes-section" id="security" aria-labelledby="outcomes-title"><div class="section-heading"><div><p class="eyebrow">No hidden path</p><h2 id="outcomes-title">Three outcomes. Clear every time.</h2></div><a class="text-link" href="/goal.html">Read the security model <i class="ph ph-arrow-up-right" aria-hidden="true"></i></a></div><div class="outcome-strip"><article class="outcome-item"><span class="outcome-status status-local"><i class="ph ph-check-circle" aria-hidden="true"></i></span><div><h3>Local</h3><p>Supported and safe? Process in a fresh worker and return the smaller blob.</p></div></article><article class="outcome-item"><span class="outcome-status status-fallback"><i class="ph ph-cloud-arrow-up" aria-hidden="true"></i></span><div><h3>Fallback</h3><p>Missing a codec? Hand the original to your server with the reason attached.</p></div></article><article class="outcome-item"><span class="outcome-status status-reject"><i class="ph ph-x-circle" aria-hidden="true"></i></span><div><h3>Reject</h3><p>Active, animated, or over policy? Stop before a decoder ever runs.</p></div></article></div></section>
+
+        <section class="closing-cta" aria-labelledby="closing-title"><div><p class="eyebrow">Start with the browser package</p><h2 id="closing-title">Ready to harden your image intake?</h2></div><div class="closing-actions"><button class="install-command install-command-compact" data-copy="pnpm add @optload/browser" type="button"><span>pnpm add @optload/browser</span><i class="ph ph-copy" aria-hidden="true"></i></button><a class="button button-primary" href="#playground">Try the playground <i class="ph ph-arrow-up-right" aria-hidden="true"></i></a></div></section>
       </main>
-    </div>
 
-    <div id="drop-overlay" class="drop-overlay" hidden aria-hidden="true">
-      <div>Drop to process</div>
+      <footer class="site-footer"><span class="brand brand-footer"><span class="brand-mark">O</span><span>optload</span></span><span>Open-source TypeScript image intake.</span><span class="footer-links"><a href="/library.html">Library</a><a href="/goal.html">Security</a><a href="https://github.com/sagawrr/optload" target="_blank" rel="noreferrer">GitHub <i class="ph ph-arrow-up-right" aria-hidden="true"></i></a></span></footer>
     </div>
-
+    <div id="drop-overlay" class="drop-overlay" hidden aria-hidden="true"><div><i class="ph ph-upload-simple" aria-hidden="true"></i><span>Drop to process</span></div></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content="The Optload image intake library: inspect, normalize, route, and verify uploads." />
+    <title>Optload library — one explicit image intake path</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body class="subpage library-page">
+    <a class="skip-link" href="#library-content">Skip to library</a>
+    <div id="app">
+      <header class="site-header"><a class="brand" href="/" aria-label="Optload home"><span class="brand-mark">O</span><span>optload</span></a><nav class="site-nav" aria-label="Primary navigation"><a class="nav-link" href="/">Playground</a><a class="nav-link" href="/goal.html">Security</a><a class="nav-link" href="https://github.com/sagawrr/optload" target="_blank" rel="noreferrer">GitHub <i class="ph ph-arrow-up-right" aria-hidden="true"></i></a><a class="nav-cta" href="/#playground">Try it live <i class="ph ph-arrow-up-right" aria-hidden="true"></i></a></nav></header>
+
+      <main class="subpage-main" id="library-content">
+        <section class="subpage-hero"><p class="eyebrow">The library</p><h1>One intake.<br /><em>Four precise packages.</em></h1><p class="lede">Compose the image path your product needs. Start in the browser for speed and privacy, keep your server as the authority, and make every decision visible to your code.</p><button class="install-command" data-copy="pnpm add @optload/browser" type="button"><span><i class="ph ph-terminal-window" aria-hidden="true"></i>pnpm add @optload/browser</span><i class="ph ph-copy" aria-hidden="true"></i></button></section>
+
+        <section class="subpage-section" aria-labelledby="packages-title"><p class="eyebrow">01 · packages</p><h2 id="packages-title">Small surfaces.<br /><em>Clear boundaries.</em></h2><p class="section-lede">Each package does one job well. Use one, or wire the complete route from inspection to server verification.</p><div class="library-grid">
+          <article class="library-card"><i class="ph ph-radar package-icon" aria-hidden="true"></i><h3>@optload/core</h3><p>Read image headers from bounded bytes, enforce upload policy, and return tagged errors before a decoder runs.</p><div class="package-meta"><span>Runtime<strong>Any JS</strong></span><span>Size<strong>~6 kB</strong></span></div></article>
+          <article class="library-card"><i class="ph ph-browser package-icon" aria-hidden="true"></i><h3>@optload/browser</h3><p>Normalize ordinary still images in a fresh worker. Promise-first APIs keep the happy path simple; Effect is there when you need it.</p><div class="package-meta"><span>Runtime<strong>Browser worker</strong></span><span>Size<strong>~18 kB</strong></span></div></article>
+          <article class="library-card"><i class="ph ph-git-branch package-icon" aria-hidden="true"></i><h3>@optload/server</h3><p>Orchestrate deadlines, fallback routes, and output re-inspection across a declared process or service boundary.</p><div class="package-meta"><span>Runtime<strong>Node / Edge</strong></span><span>Size<strong>~12 kB</strong></span></div></article>
+          <article class="library-card"><i class="ph ph-stack package-icon" aria-hidden="true"></i><h3>@optload/sharp-normalizer</h3><p>Reference Sharp/libvips adapter with one child process per image and an explicit buffer-loader allowlist.</p><div class="package-meta"><span>Runtime<strong>Node</strong></span><span>Size<strong>~45 kB</strong></span></div></article>
+        </div></section>
+
+        <section class="subpage-section" aria-labelledby="formats-title"><p class="eyebrow">02 · formats</p><h2 id="formats-title">Know what happens<br /><em>before it happens.</em></h2><p class="section-lede">Detection and policy are separate from decode. A browser that cannot safely handle a format routes it; it never silently guesses.</p><table class="support-table"><thead><tr><th>Format</th><th>Detect</th><th>Inspect</th><th>Browser transform</th><th>Server transform</th></tr></thead><tbody><tr><td>JPEG</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td></tr><tr><td>PNG</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td></tr><tr><td>WebP</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td></tr><tr><td>AVIF</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td></tr><tr><td>HEIC / HEIF</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-route">fallback</td><td class="support-route">probe first</td></tr><tr><td>Animated / active</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-route">reject</td><td class="support-route">reject</td></tr></tbody></table></section>
+
+        <section class="subpage-section" aria-labelledby="api-title"><p class="eyebrow">03 · the first five minutes</p><h2 id="api-title">Install, process,<br /><em>handle the route.</em></h2><div class="code-panel"><div class="code-panel-top"><span><i class="ph ph-terminal-window" aria-hidden="true"></i>TypeScript</span><button class="icon-button" data-copy="pnpm add @optload/browser" aria-label="Copy install command"><i class="ph ph-copy" aria-hidden="true"></i></button></div><pre><code><span class="code-key">import</span> { createImageIntake } <span class="code-key">from</span> <span class="code-string">'@optload/browser'</span>
+
+<span class="code-key">const</span> images = createImageIntake({
+  output: { format: <span class="code-string">'webp'</span>, maxWidth: <span class="code-number">2048</span> },
+  fallback: <span class="code-key">async</span> ({ file, reason }) =&gt; uploadToServer(file, reason),
+})
+
+<span class="code-key">const</span> result = <span class="code-key">await</span> images.process(file)
+
+<span class="code-key">if</span> (result.kind === <span class="code-string">'local'</span>) save(result.blob)
+<span class="code-key">if</span> (result.kind === <span class="code-string">'fallback'</span>) showServerRoute(result.value)
+<span class="code-comment">// reject is typed, early, and never uploaded automatically</span></code></pre></div></section>
+
+        <section class="subpage-section" aria-labelledby="principles-title"><p class="eyebrow">04 · principles</p><h2 id="principles-title">The defaults are<br /><em>the product.</em></h2><div class="outcome-strip"><article class="outcome-item"><span class="outcome-status status-local"><i class="ph ph-lightning" aria-hidden="true"></i></span><div><h3>Fast where it matters</h3><p>Keep supported work local and keep the upload small.</p></div></article><article class="outcome-item"><span class="outcome-status status-fallback"><i class="ph ph-shield-check" aria-hidden="true"></i></span><div><h3>Secure by design</h3><p>Read bytes before decode. Re-inspect at the server boundary.</p></div></article><article class="outcome-item"><span class="outcome-status status-reject"><i class="ph ph-code" aria-hidden="true"></i></span><div><h3>TypeScript native</h3><p>Promise-first ergonomics with Effect-native control when you need it.</p></div></article></div></section>
+      </main>
+      <footer class="site-footer"><span class="brand brand-footer"><span class="brand-mark">O</span><span>optload</span></span><span>Open-source TypeScript image intake.</span><span class="footer-links"><a href="/">Playground</a><a href="/goal.html">Security</a><a href="https://github.com/sagawrr/optload" target="_blank" rel="noreferrer">GitHub <i class="ph ph-arrow-up-right" aria-hidden="true"></i></a></span></footer>
+    </div>
+    <script type="module" src="/src/library.ts"></script>
+  </body>
+</html>
